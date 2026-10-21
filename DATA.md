@@ -6,9 +6,10 @@ repository (total ≈ 28 GB; individual files up to ~4.7 GB). Download the items
 need and place them under the paths the scripts default to (overridable via CLI
 args / env vars).
 
-**Hosts:** [Zenodo](https://zenodo.org) for datasets and intermediate results;
-[HuggingFace](https://huggingface.co) for model weights. Links/DOIs are placeholders
-(`TBD`) — fill them in after upload.
+**Hosts:** [ModelScope](https://www.modelscope.cn) for model weights;
+[Zenodo](https://zenodo.org) for datasets and intermediate results. Model links
+are filled in below; Zenodo DOIs are placeholders (`TBD`) — fill them in after
+upload.
 
 ## Minimal reproduction set
 
@@ -33,17 +34,22 @@ Everything below is additional (full intermediate-result set for strict auditabi
 | `MassSpecGym1.5_retrieval_candidates_formula.json` | 0.37 GB | `TBD` | Exp-1 formula candidate pools |
 | `MassSpecGym1.5_retrieval_candidates_mass.json` | 0.45 GB | `TBD` | Exp-1 mass candidate pools |
 
-## Model weights → HuggingFace
+## Model weights → ModelScope
 
 | Asset | Size | Link | Role |
 |---|---|---|---|
-| Exp-1 Listwise SFT LoRA (`checkpoint-1227`) | ~130 MB | `TBD` | Exp-1 stage-1 formula reranker adapter |
-| Exp-1 Override-V3 LoRA (`checkpoint-80`) | ~130 MB | `TBD` | Exp-1 final KEEP/SWAP verifier adapter |
-| Exp-2 Pairwise Verifier LoRA (`checkpoint-194`) | ~130 MB | `TBD` | Exp-2 final pairwise structure verifier adapter |
-| Exp-1 XGBoost pre-ranker (`preranker_xgb_train20000_val3000.json`) | ~5 MB | `TBD` | Exp-1 broad candidate pre-ranker |
-| Exp-2 cross-formula XGBoost OOF bundle (`xgb_oof_v1/`) | ~7 GB | `TBD` | Exp-2 OOF scores + ranker artifacts |
+| Exp-1 Listwise SFT LoRA (`checkpoint-1227`) | ~392 MB | <https://www.modelscope.cn/models/eibicidi/nc-massspec-exp1-listwise-sft> | Exp-1 stage-1 formula reranker adapter |
+| Exp-1 Override-V3 LoRA (`checkpoint-80`) | ~372 MB | <https://www.modelscope.cn/models/eibicidi/nc-massspec-exp1-override-v3> | Exp-1 final KEEP/SWAP verifier adapter |
+| Exp-2 Pairwise Verifier LoRA (`checkpoint-194`) | ~913 MB | <https://www.modelscope.cn/models/eibicidi/nc-massspec-exp2-pairwise-verifier> | Exp-2 final pairwise structure verifier adapter |
+| Exp-1 XGBoost pre-ranker (`preranker_xgb_train20000_val3000.json`) | ~5 MB | <https://www.modelscope.cn/models/eibicidi/nc-massspec-exp1-xgb-preranker> | Exp-1 broad candidate pre-ranker |
 
-Base model: **Qwen3-14B** (HuggingFace `Qwen/Qwen3-14B`), not redistributed here.
+Each ModelScope repo ships the full training checkpoint (adapter weights +
+`optimizer.pt` / `scheduler.pt` / `rng_state.pth` for resumable training). For
+inference-only use, download just `adapter_config.json`, `adapter_model.safetensors`,
+`additional_config.json`, and `args.json` (the LoRA adapter alone is ~130 MB).
+
+Base model: **Qwen3-14B** (ModelScope [`Qwen/Qwen3-14B`](https://www.modelscope.cn/models/Qwen/Qwen3-14B)),
+not redistributed here.
 
 ## Intermediate results → Zenodo (the large JSONL / binary files)
 
@@ -59,6 +65,7 @@ Base model: **Qwen3-14B** (HuggingFace `Qwen/Qwen3-14B`), not redistributed here
 | Exp-2 `global_formula_structure_pool.jsonl` | ~1.1 GB | `TBD` | Exp-2 global candidate pool |
 | Exp-2 `branch_candidates_after_lattice.jsonl` | ~1.0 GB | `TBD` | Exp-2 post-Formula-Lattice candidates |
 | Exp-2 pairwise supervised/context JSONL | ~32 MB | `TBD` | Exp-2 Pairwise Verifier training data |
+| Exp-2 cross-formula XGBoost OOF bundle (`xgb_oof_v1/`) | ~4.0 GB | `TBD` | Exp-2 OOF scores, features, labels & predictions |
 | **`final_margin01_predictions.jsonl`** | ~20 MB | `TBD` | **Exp-2 final structure predictions** |
 | Formula-K mechanism dirs (`pred_top1/3/5/10/`, `reference_formula/`) | ~20 GB | `TBD` | Formula-K sensitivity / mechanism experiments |
 
@@ -70,7 +77,7 @@ nc-massspec-pipeline/
 │   ├── exp1/          Exp-1 datasets + SFT training data + final prediction
 │   └── exp2/          Exp-2 SIRIUS candidates + lattice/pool + pairwise data
 ├── models/
-│   ├── Qwen3-14B/                     (base model, from HuggingFace)
+│   ├── Qwen3-14B/                     (base model, from ModelScope)
 │   ├── exp1_listwise/checkpoint-1227/
 │   ├── exp1_override_v3/checkpoint-80/
 │   └── exp2_pairwise_verifier/checkpoint-194/

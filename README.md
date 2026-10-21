@@ -57,7 +57,7 @@ terminal empty-pool rescue. See the per-experiment READMEs for the full definiti
 ```
 nc-massspec-pipeline/
 ├── README.md                              (this file)
-├── DATA.md                                external-asset table (HuggingFace / Zenodo)
+├── DATA.md                                external-asset table (ModelScope / Zenodo)
 ├── requirements.txt
 ├── docs/                                  per-file manifests (verbatim, from the authors)
 ├── experiment1_formula_prediction/code/   10 .py + 3 .sh

@@ -5,9 +5,9 @@ set -euo pipefail
 # Experiment 1: deploy the Override-V3 Qwen3-14B LoRA adapter (ms-swift + vLLM)
 #
 # Required env vars:
-#   MODEL     - path to (or HuggingFace id of) the Qwen3-14B base model
+#   MODEL     - path to (or ModelScope id of) the Qwen3-14B base model
 #   ADAPTERS  - path to the Override-V3 checkpoint-80 adapter directory
-#               (download from HuggingFace - see DATA.md)
+#               (download from ModelScope - see DATA.md)
 #
 # Usage:
 #   MODEL=/path/to/Qwen3-14B \
