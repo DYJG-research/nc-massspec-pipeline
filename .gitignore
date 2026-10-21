@@ -1,0 +1,59 @@
+# =============================================================================
+# Large data, intermediate results, and model weights are NOT tracked here.
+# They are hosted externally on HuggingFace / Zenodo — see DATA.md.
+# =============================================================================
+
+# --- Data / intermediate results / model weights (by extension) ---
+*.jsonl
+*.jsonl.gz
+*.json
+*.bin
+*.f32.bin
+*.u8.bin
+*.i32.bin
+*.gz
+*.tsv
+*.sqlite
+*.sirius
+*.safetensors
+*.pt
+*.pth
+*.ckpt
+*.onnx
+*.h5
+*.npy
+*.npz
+*.parquet
+*.csv
+
+# --- Data / output directory conventions ---
+# (Note: do NOT ignore bare `outputs/` — it would catch `figures/outputs/`.
+#  Large output files are already covered by the extension rules above.)
+data/
+datasets/
+work/
+results/
+runs/
+checkpoints/
+models/
+logs/
+*.log
+*.out
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*.egg-info/
+.ipynb_checkpoints/
+.venv/
+venv/
+env/
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.tmp

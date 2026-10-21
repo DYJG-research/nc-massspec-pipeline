@@ -1,0 +1,2955 @@
+======================================================================
+实验三：最终版本全部文件说明与归档指南
+版本日期：2026-09-03
+项目：质谱实习 / Nature Communications 稿件实验三
+主题：De novo molecular structure prediction under molecular-formula uncertainty
+======================================================================
+
+【说明范围】
+
+本文件用于整理“实验三”当前与论文最终结果直接相关的全部主要资产，包括：
+1. Python 代码；
+2. Shell / 命令脚本；
+3. 原始数据和上游输入；
+4. Top-K 分子式传播数据；
+5. SIRIUS / MSNovelist 结构生成输入、工程和输出；
+6. Formula-Lattice 中间结果、审计文件和 frozen 代码；
+7. Cross-formula XGBoost 训练/OOF 数据和结果；
+8. Qwen3-14B Pairwise Verifier 的训练数据、开发数据、推理结果和模型权重；
+9. 最终 Accuracy / ECFP4 / MCES 评价文件；
+10. Top-5 消融实验；
+11. Formula Top-1 / Top-3 / Top-5 / Top-10 / Reference-Formula 机制实验；
+12. Empty-pool rescue 补充实验；
+13. 训练日志、推理日志、统计文件、审计文件、缓存文件；
+14. 与最终实验有关系但已经不进入正式主模型的历史文件。
+
+特别注意：
+- 论文正式主模型采用 Predicted Formula Top-10。
+- 正式主模型不包含 terminal empty-pool rescue。
+- Top-5 仍用于论文中的受控消融实验。
+- Formula Top-1 / Top-3 / Top-5 / Top-10 / reference-formula 用于机制实验。
+- Pairwise Structure Verifier 最终模型为 checkpoint-194。
+- 本说明以当前对话中已核对的服务器路径、服务器 find/grep 输出、训练日志和论文 V0903 方法章节为依据。
+- 对数百个 SIRIUS shard 内重复出现的工程文件，不逐个写 shard 编号，而按“文件族”说明其用途。
+- 对尚未在日志中锁定精确文件名的个别结果，以“目录整体保留”为准，避免凭空创造文件名。
+
+
+======================================================================
+一、统一路径变量
+======================================================================
+
+1. 实验三项目根目录
+
+PROJECT =
+/u01/liukangjun/NC/exp3/ourllm/DistilledStructureCoT/massspec_sirius_pipeline
+
+说明：
+实验三的主要 Python、Shell、work 中间文件、Formula-Lattice、
+XGB、Pairwise Verifier 和最终结果均位于该项目下。
+
+
+2. MassSpecGym 原始数据
+
+DATASET =
+/u01/liukangjun/NC/Data/MassSpecGym/MassSpecGym1.5.json
+
+作用：
+- MassSpecGym 1.5 完整数据；
+- 总计 231,104 条；
+- predefined test fold = 17,556 条；
+- 提供 precursor m/z、polarity、MS/MS peaks；
+- reference SMILES / molecule 仅在监督、fold grouping 和独立 evaluator 中使用；
+- 最终推理不将 reference structure 作为输入。
+
+
+3. 实验一向实验三提供的最终分子式预测
+
+EXP1_FORMULA =
+$PROJECT/exp1_output/final_test17556_xgb_llm_v3.jsonl
+
+完整路径：
+/u01/liukangjun/NC/exp3/ourllm/DistilledStructureCoT/massspec_sirius_pipeline/exp1_output/final_test17556_xgb_llm_v3.jsonl
+
+作用：
+- 实验三的上游 molecular-formula hypotheses 来源；
+- 含最终 formula shortlist、formula scores、latent adduct、ppm error、DBE 等；
+- Top-1 / Top-3 / Top-5 / Top-10 Formula 机制实验均由这套最终分子式结果派生。
+
+
+4. 原始 Top-5 Cross-formula / Pairwise 开发根目录
+
+BASE =
+$PROJECT/work/predicted_formula_multihyp_v1/cross_formula/xgb_oof_v1
+
+完整路径：
+/u01/liukangjun/NC/exp3/ourllm/DistilledStructureCoT/massspec_sirius_pipeline/work/predicted_formula_multihyp_v1/cross_formula/xgb_oof_v1
+
+作用：
+- 原 Top-5 structure candidate ranking；
+- Top-5 受控消融；
+- Pairwise Verifier v2 的 2,643-spectrum development / OOF 体系；
+- 最终 checkpoint-194 的训练数据来源。
+
+
+5. Pairwise Verifier 根目录
+
+PW_DIR =
+$BASE/pairwise_verifier_v2
+
+完整路径：
+/u01/liukangjun/NC/exp3/ourllm/DistilledStructureCoT/massspec_sirius_pipeline/work/predicted_formula_multihyp_v1/cross_formula/xgb_oof_v1/pairwise_verifier_v2
+
+
+6. 最终 Top-10 Formula 主实验目录
+
+ROOT10 =
+$PROJECT/work/predicted_formula_multihyp_v1/formula_k_analysis/pred_top10
+
+完整路径：
+/u01/liukangjun/NC/exp3/ourllm/DistilledStructureCoT/massspec_sirius_pipeline/work/predicted_formula_multihyp_v1/formula_k_analysis/pred_top10
+
+这是实验三最终主结果最重要的目录。
+
+
+======================================================================
+二、论文最终主流程概览
+======================================================================
+
+正式主流程：
+
+Exp1 final formula predictions
+    ↓
+Predicted Formula Top-10
+    ↓
+independent formula branches
+    ↓
+SIRIUS 6.3.7 / MSNovelist de novo generation
+    ↓
+strict branch-level chemical validation
+    ↓
+Multi-Hypothesis Formula-Lattice
+    ↓
+Global Formula-Structure Pool
+    ↓
+Cross-formula XGBoost OOF ranking
+    ↓
+Selective Qwen3-14B Pairwise Verifier
+    ↓
+Final Top-10 structures
+    ↓
+Accuracy / ECFP4 / MCES
+
+正式主模型不包含 terminal rescue。
+
+最终主结果：
+N = 17,556
+Top-1 Accuracy  = 22.75%
+Top-10 Accuracy = 29.22%
+ECFP4@1         = 0.4453
+ECFP4@10        = 0.5311
+MCES@1          = 14.7363
+MCES@10         = 10.6072
+Empty outputs   = 13
+
+
+======================================================================
+三、Python 代码：多分子式输入与 Branch 构建
+======================================================================
+
+[FINAL CODE]
+
+1.
+$PROJECT/scripts/145_convert_exp1_to_multiformula.py
+
+作用：
+- 将实验一最终 formula prediction 格式转换为实验三 multi-formula 输入格式；
+- 保留 spectrum、formula rank、formula、latent adduct、formula score、
+  ppm error、DBE 等；
+- 是 Exp1 → Exp3 的格式桥接代码。
+
+状态：
+FINAL / 输入转换。
+
+
+2.
+$PROJECT/scripts/131_validate_multiformula_input.py
+
+作用：
+- 检查 multi-formula 输入是否满足预期 schema；
+- 检查 sample / formula ranks / required fields；
+- 用于正式大规模 SIRIUS 前的数据完整性验证。
+
+状态：
+FINAL VALIDATION CODE。
+
+
+3.
+$PROJECT/scripts/132_check_no_gt.py
+
+作用：
+- 审计结构生成 / Formula-Lattice 的输入中是否包含不应出现的 GT；
+- 用于证明 reference SMILES / InChIKey 不作为结构推理输入。
+
+状态：
+FINAL SAFETY / LEAKAGE AUDIT CODE。
+
+
+4.
+$PROJECT/scripts/133_build_multiformula_branches.py
+
+作用：
+- 将每个 spectrum 的 Top-K molecular formula hypotheses 展开为独立 branch；
+- 为每个 branch 生成标准 branch_id；
+- branch_id 形如：
+  MassSpecGymIDxxxxxxx__F01__<hash>
+- 保存 formula_rank、formula、adduct、formula score、ppm、DBE 等；
+- 支持按 shard 切分 branch。
+
+重要：
+- 标准实现要求 formula ranks 通常为连续 1..K；
+- Empty-rescue Rank11-30 曾因非连续 rank 使用本脚本而报错，
+  后续 rescue 另行生成标准 manifest。
+
+状态：
+FINAL BRANCH BUILDER。
+
+
+5.
+$PROJECT/scripts/134_build_multiformula_sirius_input.py
+
+作用：
+- 根据 branch manifest 为每个 formula branch 构造 SIRIUS 输入；
+- 每个 branch 独立带 predicted formula + latent adduct + precursor + MS/MS；
+- 将一张 spectrum 的不同 formula hypotheses 变成可独立运行的
+  SIRIUS/MSNovelist structure-generation jobs。
+
+状态：
+FINAL SIRIUS INPUT BUILDER。
+
+
+6.
+$PROJECT/scripts/82_prepare_sirius_input.py
+
+作用：
+- 较早/基础版 SIRIUS 输入准备工具；
+- 为最终多分子式版本提供基础格式参考或兼容能力；
+- 如果最终脚本存在间接依赖，必须一起保留。
+
+状态：
+SUPPORTING CODE。
+
+
+7.
+$PROJECT/scripts/83_parse_denovo_summary.py
+
+作用：
+- 基础 SIRIUS denovo summary parser；
+- 解析 denovo structure identification 表；
+- 最终 multi-formula 正式流程主要使用 138。
+
+状态：
+SUPPORTING / LEGACY-COMPATIBLE CODE。
+
+
+======================================================================
+四、Shell / 命令脚本：SIRIUS / MSNovelist
+======================================================================
+
+[FINAL SHELL]
+
+1.
+$PROJECT/scripts/143_run_multiformula_sirius_sharded.sh
+
+作用：
+- 正式 multi-formula SIRIUS 分 shard 执行脚本；
+- 对大量 formula branches 分批运行 SIRIUS 6.3.7；
+- 执行 formula-conditioned de novo structure generation；
+- 产生每个 shard 的 massspec project、compute log、export log、
+  denovo_structure_identifications_top-100.tsv 等；
+- 支持全量 test17556 / Top-K formula branch 运行。
+
+状态：
+FINAL STRUCTURE GENERATION SHELL。
+
+
+2.
+$PROJECT/scripts/144_run_global_multihyp_lattice.sh
+
+作用：
+- 正式 Multi-Hypothesis Formula-Lattice launcher；
+- 输入：
+  BRANCH_MANIFEST
+  MERGED_CANDIDATES
+  LATTICE_ROOT
+- 默认：
+  LATTICE_TOPK=10
+  LATTICE_LOCK_MODE=top1
+- 先调用：
+  scripts/140_multihyp_formula_lattice_predict.py
+- 再调用：
+  scripts/136_build_global_formula_structure_pool.py
+- 自动生成：
+  branch_candidates_after_lattice.jsonl
+  lattice_audit.json
+  global_formula_structure_pool.jsonl
+  global_pool_stats.json
+- 最后执行 Top-1 lock / branch integrity 检查。
+
+状态：
+FINAL FORMULA-LATTICE SHELL。
+
+
+3.
+$PROJECT/scripts/164_prepare_pairwise_folds_2to5.sh
+
+作用：
+- Pairwise Verifier v2 的 OOF 开发脚本；
+- 以 pairwise_supervised_full.jsonl 为输入；
+- 准备 Fold2-Fold5 的训练/holdout 数据；
+- 服务于 verifier protocol 的 OOF 开发和数据隔离验证。
+
+状态：
+VERIFIER DEVELOPMENT / OOF SHELL。
+
+
+4.
+$PROJECT/work/predicted_formula_multihyp_v1/oracle_working_sirius_runner.sh
+
+作用：
+- reference-formula / Oracle Formula 条件下的 SIRIUS 运行脚本；
+- 用于 Fig.3 Formula-K sensitivity 中 Ref. / reference-formula upper-bound；
+- GT formula 作为显式实验条件，但 GT adduct 不作为输入，
+  latent adduct 仍按允许规则推断。
+
+状态：
+MECHANISM EXPERIMENT SHELL。
+
+
+======================================================================
+五、Python 代码：SIRIUS 输出解析
+======================================================================
+
+1.
+$PROJECT/scripts/138_parse_multiformula_denovo_summary.py
+
+作用：
+- 正式 multi-formula SIRIUS/MSNovelist 输出解析器；
+- 读取每个 shard 的：
+  summaries/denovo_structure_identifications_top-100.tsv
+- 将 SIRIUS export 输出恢复到 branch_id；
+- 输出每个 branch 的结构候选、原 generator rank、generator score；
+- 对 branch_id 的 rank/hash suffix 有严格要求；
+- 是后续 Formula-Lattice 直接读取的关键中间数据构建脚本。
+
+状态：
+FINAL PARSER。
+
+
+2.
+$PROJECT/83_parse_denovo_summary_fixed.py
+
+作用：
+- 早期 full-test / parser 修正版；
+- 属于历史调试和 fixed 版本记录；
+- 不应替代当前论文主流程的 scripts/138，但建议归档。
+
+状态：
+HISTORICAL / FIXED LEGACY。
+
+
+======================================================================
+六、Python 代码：Formula-Lattice 核心原创方法
+======================================================================
+
+[VERY IMPORTANT FINAL CODE]
+
+1.
+$PROJECT/scripts/80_formula_lattice_predict.py
+
+作用：
+Formula-Lattice 的底层化学编辑与 route merge 实现。
+
+主要实现：
+- dehydration：formula delta = -H2O；
+- acetyl-like removal / deacetylation：formula delta = -C2H2O；
+- tri-hydroxylation：formula delta = +O3；
+- double reduction：formula delta = +H4；
+- RDKit graph edit；
+- local structural site score；
+- exact target-formula validation；
+- connectedness / formal charge / radical / valence checks；
+- canonicalization；
+- merge_candidate_routes()；
+- Top-1 lock 相关底层策略。
+
+这是 Supplementary Methods 中四种 graph-edit operator
+具体可复现定义的核心代码来源。
+
+状态：
+FINAL CORE CHEMISTRY CODE。
+
+
+2.
+$PROJECT/scripts/140_multihyp_formula_lattice_predict.py
+
+作用：
+正式 Multi-Hypothesis Formula-Lattice 主程序。
+
+主要实现：
+- current-batch same-formula transfer；
+- formula-to-formula neighbor graph；
+- cross-spectrum donor selection；
+- fragment spectrum preprocessing；
+- precursor-relative neutral-loss spectrum；
+- spectral similarity；
+- same-adduct:
+  0.70 direct + 0.30 neutral loss；
+- different-adduct:
+  0.25 direct + 0.75 neutral loss；
+- matched cosine tolerance：
+  max(20 ppm, 0.025 Da)；
+- donor-rank landmarks：
+  1,2,3,5,7,10,14,20,30,50；
+- 默认禁止 same-spectrum formula-neighbor editing；
+- 调用 scripts/80_formula_lattice_predict.py 的 graph-edit operator；
+- original Top-1 lock；
+- branch Top-K merge；
+- provenance 记录；
+- 输出 lattice audit。
+
+状态：
+FINAL CORE METHOD CODE。
+
+
+3.
+$PROJECT/scripts/136_build_global_formula_structure_pool.py
+
+作用：
+- 将 Formula-Lattice 后的多个 formula branches 合并为
+  Global Formula-Structure Pool；
+- canonical SMILES 去重；
+- 保留 formula rank、branch route rank、source、donor provenance；
+- 相同结构来自多个 formula/route 时执行确定性 provenance merge；
+- 本阶段只是构造 global candidate pool，
+  不等于最终 cross-formula scientific ranking。
+
+状态：
+FINAL GLOBAL POOL CODE。
+
+
+4.
+$PROJECT/80_formula_lattice_predict_fast.py
+
+作用：
+- Formula-Lattice 的历史 fast 优化实现；
+- 用于性能加速试验；
+- 不作为 V0903 Methods 4.5 的最终权威代码。
+
+状态：
+HISTORICAL / OPTIMIZATION。
+
+
+5.
+$PROJECT/80_formula_lattice_predict_fast_chargefix.py
+
+作用：
+- fast Formula-Lattice 的 charge 修正版；
+- 历史性能/合法性修复探索；
+- 当前论文的正式规则应以 scripts/80 + scripts/140 frozen 路线为准。
+
+状态：
+HISTORICAL / DEBUG。
+
+
+6.
+$PROJECT/scripts/70_formula_lattice_predict.py
+
+作用：
+- Formula-Lattice 早期 pilot 版本；
+- 用于 pilot100 开发；
+- 后续被 80/140 multi-hypothesis 版本取代。
+
+状态：
+DEPRECATED METHOD DEVELOPMENT。
+
+
+======================================================================
+七、Formula-Lattice frozen 代码
+======================================================================
+
+【非常重要】
+
+1.
+$PROJECT/work/predicted_formula_multihyp_v1/frozen/REAL17556_candidate_pool_v1/140_multihyp_formula_lattice_predict.py
+
+作用：
+- test17556 正式 candidate pool 构建时冻结的 140 版本；
+- 比当前 scripts/140 更适合用于证明“论文最终结果实际跑的是哪一版代码”；
+- 后续 scripts/ 目录即使被修改，这份 frozen copy 仍保留结果对应版本。
+
+状态：
+FINAL RESULT FROZEN CODE。
+
+
+2.
+$PROJECT/work/predicted_formula_multihyp_v1/frozen/REAL17556_candidate_pool_v1/136_build_global_formula_structure_pool.py
+
+作用：
+- 与 REAL17556 candidate pool 同时冻结的 global-pool builder；
+- 用于追溯最终 test candidate pool 的实际代码版本。
+
+状态：
+FINAL RESULT FROZEN CODE。
+
+
+3.
+$PROJECT/work/predicted_formula_multihyp_v1/frozen/REAL2643_candidate_pool_v1/140_multihyp_formula_lattice_predict.py
+
+作用：
+- 2,643-spectrum verifier development corpus 使用的 Formula-Lattice frozen 版本；
+- 用于解释 Pairwise Verifier 训练数据来源。
+
+状态：
+VERIFIER DEVELOPMENT FROZEN CODE。
+
+
+4.
+$PROJECT/work/predicted_formula_multihyp_v1/frozen/REAL2643_candidate_pool_v1/136_build_global_formula_structure_pool.py
+
+作用：
+- 2,643 development spectra 的 Global Pool frozen builder。
+
+状态：
+VERIFIER DEVELOPMENT FROZEN CODE。
+
+
+======================================================================
+八、Top-10 Formula 主实验数据
+======================================================================
+
+1.
+$ROOT10/data/pred_top10_input.jsonl
+
+作用：
+- 17,556 条 test spectra 的最终 Predicted Formula Top-10 输入；
+- 每个 spectrum 记录 MS/MS、precursor、polarity 以及最多 10 个
+  ranked formula hypotheses；
+- 是最终结构主实验的直接输入。
+
+状态：
+OFFICIAL FINAL TOP10 INPUT。
+
+
+2.
+$ROOT10/branches/branch_manifest.jsonl
+
+作用：
+- Top-10 formula hypotheses 展开后的正式 branch manifest；
+- 共 17,556 spectra；
+- 共 175,529 formula branches；
+- 每行对应一个 formula-conditioned structure-generation branch；
+- 记录：
+  sample_id
+  branch_id
+  formula_rank
+  formula
+  adduct
+  formula_score
+  ppm_error
+  DBE
+  等。
+
+状态：
+OFFICIAL FINAL BRANCH MANIFEST。
+
+
+3.
+$ROOT10/branches/rank6_10_branch_manifest.jsonl
+
+作用：
+- 在原 Top-5 基础上扩展 Formula ranks 6-10 时建立的 manifest；
+- rank6-10 共约 87,750 branches；
+- 用于避免重新跑已经存在的 Top1-5 branches。
+
+状态：
+TOP10 EXPANSION INTERMEDIATE。
+
+
+4.
+$ROOT10 下与 branch 构建相关的 stats / audit JSON
+
+典型作用：
+- 记录每个 rank branch 数量；
+- sample count；
+- branch count；
+- shard 分配；
+- 输入一致性。
+
+状态：
+FINAL AUDIT。
+建议整个 branches/ 和 logs/ 目录保留。
+
+
+======================================================================
+九、SIRIUS / MSNovelist 输入文件与工程文件
+======================================================================
+
+【文件族说明】
+
+1.
+$ROOT10/sirius_input/...
+
+作用：
+- 保存 formula-conditioned SIRIUS 输入；
+- 通常每个 branch 对应一个 .ms 或等价 SIRIUS input；
+- 包含 precursor、ion/adduct、formula、MS/MS peaks；
+- 如果重新执行 SIRIUS，可直接从这里开始。
+
+状态：
+FINAL STRUCTURE-GENERATION INPUT。
+
+
+2.
+$ROOT10/sirius_project/...
+或对应实际 Top-10 shard/project 目录
+
+作用：
+- SIRIUS project 工程；
+- 保存每个 shard 的计算项目；
+- 大量磁盘占用；
+- 若保留，可追溯原始 SIRIUS 运行。
+
+典型文件：
+
+a. massspec_project.sirius / project.sirius
+- SIRIUS 工程本体。
+
+b. sirius_compute.log
+- SIRIUS compute 阶段日志；
+- 记录公式、fingerprints、denovo-structures 等任务是否完成；
+- 用于排查失败 branch。
+
+c. sirius_export.log
+- SIRIUS export 阶段日志；
+- 记录结果导出情况。
+
+d. summaries/denovo_structure_identifications_top-100.tsv
+- 每个 shard 的原始 Top-100 de novo structure export；
+- 由 138 parser 转为 JSONL。
+
+状态：
+FINAL RAW GENERATION EVIDENCE。
+
+
+3.
+work/test17556/sirius_batches/outputs/batch_XXXX/...
+
+说明：
+- 这是实验三早期/基础 full-test SIRIUS batch 工程；
+- 已确认大量 batch 下存在：
+  massspec_project.sirius
+  sirius_compute.log
+  sirius_export.log
+- 如果论文最终 Top-10 运行复用了其中结果，应整体保留；
+- 如果只是早期 single-formula / pilot 路线，则可放 HISTORICAL。
+
+状态：
+HISTORICAL OR REUSED RAW SIRIUS ARTIFACT，需按实际使用情况归档。
+
+
+======================================================================
+十、SIRIUS / MSNovelist 解析后的正式候选
+======================================================================
+
+1.
+$ROOT10/branch_candidates/top10_sirius_candidates.jsonl
+
+作用：
+- Predicted Formula Top-10 每个 branch 的 SIRIUS/MSNovelist 原始结构候选；
+- Formula-Lattice 的直接输入；
+- 若这个文件存在，则后续 Formula-Lattice / XGB / LLM 可以重跑而无需重新跑 SIRIUS；
+- 包含每 branch 的 structure list、rank、generator score 等。
+
+状态：
+OFFICIAL FINAL RAW STRUCTURE CANDIDATES。
+
+
+2.
+其他 branch_candidates/*.jsonl
+
+作用：
+- Top1-5 已有候选、rank6-10 新增候选、merged candidates、
+  parser 中间输出等；
+- 建议 branch_candidates/ 目录整体保留。
+
+状态：
+FINAL INTERMEDIATE。
+
+
+======================================================================
+十一、Formula-Lattice 正式输出数据
+======================================================================
+
+1.
+$ROOT10/lattice/branch_candidates_after_lattice.jsonl
+
+作用：
+- 每个 formula branch 经 same-formula transfer +
+  graph-edit expansion 后的候选；
+- 保留 original / transferred / edited 来源；
+- 每 branch 最多 10 个；
+- 是 Global Pool builder 的输入。
+
+状态：
+FINAL LATTICE OUTPUT。
+
+
+2.
+$ROOT10/lattice/lattice_audit.json
+
+作用：
+- Formula-Lattice 完整审计；
+- 记录：
+  num_samples
+  num_branches
+  originally_nonempty_branches
+  originally_empty_branches
+  branches_with_final_candidates
+  own_top1_changed_branches
+  source counts
+  database_access=False
+  truth_fields_read_by_predictor=[]
+  landmark_ranks
+  active formula-lattice links
+  runtime 等；
+- 是证明 no-GT / no-external-database / Top-1 lock 的重要证据。
+
+状态：
+FINAL METHOD AUDIT。
+
+
+3.
+$ROOT10/lattice/global_formula_structure_pool.jsonl
+
+作用：
+- Formula-Lattice 后所有 formula branches 的全局结构候选池；
+- Cross-formula XGBoost 的直接候选来源；
+- 候选带 formula provenance、branch provenance、source provenance。
+
+状态：
+OFFICIAL FINAL GLOBAL POOL。
+
+
+4.
+$ROOT10/lattice/global_pool_stats.json
+
+作用：
+- 记录 global pool 的 sample 数、candidate 数、来源分布、去重情况等；
+- 用于完整性检查和 Supplementary reproducibility。
+
+状态：
+FINAL POOL STATISTICS。
+
+
+======================================================================
+十二、Cross-formula XGBoost Python 代码
+======================================================================
+
+1.
+$PROJECT/scripts/150_build_cross_formula_rank_dataset.py
+
+作用：
+- 从 Global Formula-Structure Pool 构建 XGB ranking dataset；
+- 一张 spectrum 作为一个 ranking group；
+- 一个 structure candidate 作为一个 instance；
+- candidate label：
+  candidate 2D InChIKey first block 与 reference 相同 → 1；
+  否则 → 0；
+- reference label 仅用于监督，不写入 inference feature；
+- 输出 rank_features、rank_labels、manifest、stats。
+
+状态：
+FINAL XGB DATASET BUILDER。
+
+
+2.
+$PROJECT/scripts/210_add_rdkit_features.py
+
+作用：
+- 在 rank_features.jsonl 基础上添加 deterministic RDKit structure descriptors；
+- 形成 rank_features_rdkit.jsonl；
+- 供最终 structure XGBRanker 使用。
+
+状态：
+FINAL FEATURE CODE。
+
+
+3.
+$PROJECT/scripts/151_oof_xgb_cross_formula_ranker_rdkit.py
+
+作用：
+- 最终 Cross-formula XGBRanker；
+- 使用 RDKit-enhanced rank features；
+- 5-fold OOF ranking；
+- molecular identity grouping；
+- 每个 holdout spectrum 由不包含该 identity 的 fold model 打分；
+- 输出 OOF candidate scores 和 predictions。
+
+重要：
+- 当前流程的关键产物是 OOF scores/predictions；
+- 没有确认保存一个统一的“final_xgb_model.json”；
+- 因此 XGB 复现必须同时保存代码、feature、label、manifest 和 OOF 输出。
+
+状态：
+FINAL XGB RANKER CODE。
+
+
+4.
+$PROJECT/scripts/152_eval_oof_cross_formula.py
+
+作用：
+- 对 Cross-formula XGB OOF 输出做评价；
+- 检查 OOF prediction performance。
+
+状态：
+FINAL / SUPPORTING EVAL。
+
+
+5.
+$PROJECT/scripts/146_evaluate_pre_cross_formula_pool.py
+
+作用：
+- 在最终 cross-formula XGB 前评价 candidate pool；
+- 用于消融中 “w/o XGB + w/o LLM” 等阶段性结果；
+- 反映 candidate-space coverage 与原始 route ordering。
+
+状态：
+ABLATION / PRE-XGB EVAL。
+
+
+6.
+$PROJECT/scripts/148_attach_truth_for_denovo_eval.py
+
+作用：
+- 将 reference truth 仅在独立评价阶段附加到 prediction；
+- 避免 predictor 本身读取 truth；
+- 服务于独立 evaluator。
+
+状态：
+FINAL EVAL SUPPORT。
+
+
+7.
+$PROJECT/scripts/149_eval_cross_formula_fast.py
+
+作用：
+- Cross-formula prediction 的快速 evaluator；
+- 用于快速 Accuracy / ECFP 类检查；
+- 正式 Pairwise 后最终 evaluator 主要使用 168。
+
+状态：
+SUPPORTING EVALUATOR。
+
+
+======================================================================
+十三、原 Top-5 XGB 数据和结果
+======================================================================
+
+根目录：
+$BASE
+
+【正式/消融必须保留】
+
+1.
+$BASE/rank_dataset_stats.json
+
+作用：
+- XGB rank dataset 统计；
+- 记录 spectrum groups、candidate rows、positive labels、feature schema 等。
+
+状态：
+FINAL DEVELOPMENT DATA STATS。
+
+
+2.
+$BASE/rank_features.jsonl
+
+作用：
+- Cross-formula ranking 的基础 candidate feature 数据；
+- 由 scripts/150 构建。
+
+状态：
+FINAL XGB INPUT DATA。
+
+
+3.
+$BASE/rank_features_rdkit.jsonl
+
+作用：
+- rank_features + RDKit descriptors；
+- 由 scripts/210 构建；
+- 是 scripts/151 的正式输入。
+
+状态：
+FINAL XGB INPUT DATA。
+
+
+4.
+$BASE/rank_labels.jsonl
+
+作用：
+- candidate exact-structure supervision；
+- label 定义为 2D InChIKey first block exact match；
+- 仅用于训练/OOF，不属于 inference-visible features。
+
+状态：
+FINAL SUPERVISION DATA。
+
+
+5.
+$BASE/sample_manifest.jsonl
+
+作用：
+- spectrum / group / fold / reference identity 的组织信息；
+- 用于 OOF grouping 和结果追踪。
+
+状态：
+FINAL MANIFEST。
+
+
+6.
+$BASE/oof_candidate_scores.jsonl
+
+作用：
+- 每个 candidate 的 OOF XGB score；
+- 每个 candidate 均由其 held-out fold 对应 ranker 打分；
+- Pairwise Verifier candidate ranking 的上游基础。
+
+状态：
+FINAL OOF SCORE。
+
+
+7.
+$BASE/oof_summary.json
+
+作用：
+- OOF XGB 整体 summary。
+
+状态：
+FINAL XGB RESULT SUMMARY。
+
+
+8.
+$BASE/oof_predictions_with_truth.jsonl
+
+作用：
+- 给独立 evaluator 使用的带 truth OOF predictions；
+- 不作为 inference input。
+
+状态：
+EVALUATION ARTIFACT。
+
+
+9.
+$BASE/oof_mces_details.jsonl
+
+作用：
+- XGB OOF 预测的逐样本 MCES 细节；
+- 用于历史 baseline / ablation 比较。
+
+状态：
+EVALUATION ARTIFACT。
+
+
+10.
+$BASE/oof_mces_summary.json
+
+作用：
+- XGB OOF MCES 汇总。
+
+状态：
+EVALUATION ARTIFACT。
+
+
+11.
+$BASE/rdkit_ranker_v1/oof_candidate_scores.jsonl
+
+作用：
+- RDKit feature 版本 ranker 的 candidate-level OOF scores。
+
+状态：
+FINAL/HISTORICAL RANKER RESULT，建议保留。
+
+
+12.
+$BASE/rdkit_ranker_v1/oof_predictions.jsonl
+
+作用：
+- RDKit ranker 的 OOF final candidate ordering。
+
+状态：
+FINAL/HISTORICAL RANKER RESULT。
+
+
+13.
+$BASE/rdkit_ranker_v1/eval.json
+
+作用：
+- RDKit ranker evaluation summary。
+
+状态：
+RESULT SUMMARY。
+
+
+【历史 XGB / LLM 排序探索】
+
+14.
+$BASE/expanded_candidates_v1.jsonl
+
+作用：
+- 历史 candidate expansion 结果；
+- 后续最终路线已由 Formula-Lattice + Global Pool 主导。
+
+状态：
+HISTORICAL。
+
+
+15.
+$BASE/sft_design/gate_sweep.json
+
+作用：
+- 早期 SFT verifier / gate threshold 探索；
+- 不等于最终 Pairwise Verifier v2 protocol。
+
+状态：
+HISTORICAL DEVELOPMENT。
+
+
+16.
+$BASE/listwise_pilot100.jsonl
+
+作用：
+- 旧 listwise LLM selector pilot 数据。
+
+状态：
+DEPRECATED LLM ROUTE。
+
+
+17.
+$BASE/listwise_predictions100.jsonl
+
+作用：
+- 旧 listwise selector pilot prediction。
+
+状态：
+DEPRECATED LLM ROUTE。
+
+
+======================================================================
+十四、Pairwise Verifier v2 Python 代码
+======================================================================
+
+[FINAL / DEVELOPMENT CORE]
+
+1.
+$PROJECT/scripts/160_build_pairwise_verifier_v2.py
+
+作用：
+- 构造最终 Pairwise Structure Verifier v2 数据；
+- 从 2,643-spectrum structure-development pool / XGB Top-10 中找 truth candidate；
+- 694 spectra 的 truth structure位于 XGB Top-10；
+- 构造 truth-vs-hard-negative pair；
+- Rank1 correct → truth 与最高 2 个错误候选组成 keep pairs；
+- Rank1 wrong but truth in Top10 → truth 与其他 9 个候选组成 correction pairs；
+- 每个逻辑 pair 做 A/B 双方向；
+- 生成严格平衡标签：
+  A = 2326
+  B = 2326
+- 总 4,652 SFT records；
+- GT 只用于标签构造，不出现在 verifier prompt。
+
+状态：
+FINAL VERIFIER TRAIN-DATA BUILDER。
+
+
+2.
+$PROJECT/scripts/161_prepare_pairwise_fold1.py
+
+作用：
+- 准备 Pairwise OOF Fold1；
+- 按 source spectrum / molecular identity 等进行数据隔离；
+- 避免同一 spectrum 的不同 pair 跨 train / holdout。
+
+状态：
+VERIFIER OOF DEVELOPMENT。
+
+
+3.
+$PROJECT/scripts/162_run_pairwise_fold1_api.py
+
+作用：
+- Pairwise Verifier 最核心推理协议；
+- 最终 test 也复用这套 pairwise comparison 逻辑；
+- XGB Rank1 与 Rank2-5 分别比较；
+- challenger-first orientation；
+- 如 challenger 获胜，再交换 A/B 做第二次确认；
+- 只有双方向均支持 challenger 才算 confirmed；
+- 多个 confirmed challenger 时采用 final_lowest_rank_confirmed，
+  即选择原始 XGB rank 最靠前者；
+- XGB score/rank 不显示给 LLM；
+- 支持 max-margin gate；
+- 最终论文使用 margin = 0.1；
+- temperature = 0。
+
+状态：
+FINAL PAIRWISE INFERENCE CODE。
+
+
+4.
+$PROJECT/scripts/163_eval_pairwise_fold1.py
+
+作用：
+- 评价 Fold1 pairwise policy；
+- 包含 final_lowest_rank_confirmed 等 policy；
+- 支持 gate sweep。
+
+状态：
+VERIFIER OOF DEVELOPMENT EVAL。
+
+
+5.
+$PROJECT/scripts/167_merge_pairwise_oof.py
+
+作用：
+- 将各 fold Pairwise predictions 合并为统一 OOF predictions；
+- 默认 policy 为 final_lowest_rank_confirmed。
+
+状态：
+VERIFIER OOF MERGE。
+
+
+6.
+$PROJECT/scripts/168_eval_pairwise_oof_fast.py
+
+作用：
+- Pairwise 后正式快速评价；
+- 计算 Top-1 / Top-10 exact accuracy；
+- 计算 ECFP4@1 / ECFP4@10；
+- invalid / missing structure ECFP4 = 0；
+- 是当前最终结构结果最重要 evaluator 之一。
+
+状态：
+FINAL OFFICIAL FAST EVALUATOR。
+
+
+7.
+$PROJECT/scripts/171_fix_merge_pairwise_predictions.py
+
+作用：
+- 修复旧 merge 过程中 candidate_ids 与其他 aligned candidate arrays 顺序不一致问题；
+- 对最终 Top-5 pairwise result 产生 canonical fixed prediction；
+- 重要原因：Pairwise promotion 必须同步重排所有候选相关数组。
+
+状态：
+FINAL MERGE FIX / DATA INTEGRITY CODE。
+
+
+8.
+$PROJECT/scripts/merge_pairwise_fold_summary.py
+
+作用：
+- 汇总各 Pairwise verifier folds 的 metrics；
+- 汇总 policy / gate sweep。
+
+状态：
+VERIFIER OOF SUMMARY CODE。
+
+
+【旧 verifier 代码，非最终 v2】
+
+9.
+$PROJECT/scripts/154_analyze_sft_gate.py
+10.
+$PROJECT/scripts/155_build_sft_verifier_dataset.py
+11.
+$PROJECT/scripts/156_prepare_sft_fold_pilot.py
+12.
+$PROJECT/scripts/156b_balance_sft_pilot_train.py
+13.
+$PROJECT/scripts/158_eval_sft_verifier_fold.py
+14.
+$PROJECT/scripts/159_run_fold1_verifier_api.py
+15.
+$PROJECT/scripts/243_build_top20_llm_sft.py
+16.
+$PROJECT/scripts/244_build_top10_selector_sft.py
+17.
+$PROJECT/scripts/245_build_top10_selector_sft_train.py
+
+作用：
+- 这些属于 Pairwise v2 之前或后续尝试的 SFT/listwise/multiclass selector 路线；
+- 不是当前 checkpoint-194 的最终 pairwise binary verifier protocol；
+- 建议归档，但明确标记 DEPRECATED / DEVELOPMENT。
+
+状态：
+HISTORICAL VERIFIER DEVELOPMENT。
+
+
+======================================================================
+十五、Pairwise Verifier 最终训练数据
+======================================================================
+
+根目录：
+$PW_DIR
+
+1.
+$PW_DIR/pairwise_supervised_full.jsonl
+
+作用：
+- checkpoint-194 实际使用的最终 SFT 数据；
+- 4,652 records；
+- 694 unique source spectra；
+- A label = 2,326；
+- B label = 2,326；
+- 训练 target 只有：
+  <selection>A</selection>
+  或
+  <selection>B</selection>
+- 没有长 CoT；
+- 没有 GT SMILES / GT InChIKey 暴露给 prompt。
+
+状态：
+FINAL TRAIN DATA。
+
+
+2.
+$PW_DIR/pairwise_context.jsonl
+
+作用：
+- 每个 verifier development spectrum 的 inference-visible context；
+- 包含 precursor、polarity、MS/MS peaks、candidate structures、
+  candidate formula/adduct/SMILES、deterministic descriptors 等；
+- 内部可带 orchestration metadata，但 XGB rank/score 和 truth 不进入 LLM prompt。
+
+状态：
+FINAL TRAINING PROVENANCE / CONTEXT。
+
+
+3.
+$PW_DIR/pairwise_dataset_stats.json
+
+作用：
+- 记录 pairwise dataset 样本量、pair type、A/B 平衡、
+  source spectra 数量等；
+- 用于论文 Supplementary Methods 数据构造说明。
+
+状态：
+FINAL TRAIN DATA STATS。
+
+
+======================================================================
+十六、Pairwise Verifier OOF 开发目录与文件
+======================================================================
+
+【Fold1】
+
+目录：
+$PW_DIR/fold1_pilot/
+
+主要文件：
+
+1. train.jsonl
+- Fold1 训练 pair 数据。
+
+2. split_stats.json
+- Fold1 train / holdout source spectrum 数量和 overlap audit。
+
+3. pairwise_smoke10.jsonl
+- 10 条 smoke inference 数据，用于 API / prompt 调试。
+
+4. fold1_pairwise_predictions.jsonl
+- Fold1 holdout pairwise predictions。
+
+5. fold1_pairwise_metrics.json
+- Fold1 metrics / policy / gate sweep。
+
+6. qwen3_14b_pairwise_lora_v2/v0-20260820-142923/
+- Fold1 LoRA 训练运行目录。
+
+7.
+checkpoint-149/
+- Fold1 OOF development checkpoint。
+
+状态：
+OOF DEVELOPMENT ONLY。
+
+
+【Fold2】
+
+目录：
+$PW_DIR/fold2_oof/
+
+主要文件：
+
+1. train.jsonl
+2. split_stats.json
+3. inference.log
+4. fold2_pairwise_predictions.jsonl
+5. fold2_pairwise_metrics.json
+6. adapter_path.txt
+7. qwen3_14b_pairwise_lora_v2/v0-20260820-162045/
+8. checkpoint-164/
+9. deploy_result/20260820-172341.jsonl
+10. logging.jsonl
+11. args.json
+
+状态：
+OOF DEVELOPMENT。
+
+
+【Fold3】
+
+目录：
+$PW_DIR/fold3_oof/
+
+主要文件：
+
+1. train.jsonl
+2. split_stats.json
+3. inference.log
+4. fold3_pairwise_predictions.jsonl
+5. fold3_pairwise_metrics.json
+6. adapter_path.txt
+7. qwen3_14b_pairwise_lora_v2/v0-20260820-162045/
+8. checkpoint-142/
+9. deploy_result/20260820-172357.jsonl
+10. logging.jsonl
+11. args.json
+
+状态：
+OOF DEVELOPMENT。
+
+
+【Fold4】
+
+目录：
+$PW_DIR/fold4_oof/
+
+主要文件：
+
+1. train.jsonl
+2. split_stats.json
+3. inference.log
+4. fold4_pairwise_predictions.jsonl
+5. fold4_pairwise_metrics.json
+6. adapter_path.txt
+7. qwen3_14b_pairwise_lora_v2/v0-20260820-162046/
+8. checkpoint-167/
+9. deploy_result/<timestamp>.jsonl
+10. logging.jsonl
+11. args.json
+
+状态：
+OOF DEVELOPMENT。
+
+
+【Fold5】
+
+目录：
+$PW_DIR/fold5_oof/
+
+主要文件：
+
+1. train.jsonl
+2. split_stats.json
+3. inference.log
+4. fold5_pairwise_predictions.jsonl
+5. fold5_pairwise_metrics.json
+6. adapter_path.txt
+7. qwen3_14b_pairwise_lora_v2/v0-20260820-171643/
+8. checkpoint-156/
+9. deploy_result/<timestamp>.jsonl
+10. logging.jsonl
+11. args.json
+
+状态：
+OOF DEVELOPMENT。
+
+
+【OOF 总体结果】
+
+1.
+$PW_DIR/oof_pairwise_final_predictions.jsonl
+
+作用：
+- Fold1-5 Pairwise predictions 合并后的完整 development OOF prediction。
+
+状态：
+VERIFIER OOF FINAL RESULT。
+
+
+2.
+$PW_DIR/oof_pairwise_final_summary.json
+
+作用：
+- Pairwise OOF policy 总结；
+- 记录最终 gate / changed cases 等。
+
+状态：
+VERIFIER OOF SUMMARY。
+
+
+3.
+$PW_DIR/oof_pairwise_fast_metrics.json
+
+作用：
+- OOF final prediction 的 Top1 / Top10 / ECFP4 快速 metrics。
+
+状态：
+VERIFIER OOF METRICS。
+
+
+4.
+$PW_DIR/oof_pairwise_predictions_with_truth.jsonl
+
+作用：
+- OOF prediction + truth，仅供独立 evaluator。
+
+状态：
+VERIFIER OOF EVAL ARTIFACT。
+
+
+5.
+$PW_DIR/oof_pairwise_mces_details.jsonl
+
+作用：
+- Pairwise OOF 逐样本 MCES 结果。
+
+状态：
+VERIFIER OOF MCES DETAILS。
+
+
+6.
+$PW_DIR/oof_pairwise_mces_summary.json
+
+作用：
+- Pairwise OOF MCES 汇总。
+
+状态：
+VERIFIER OOF MCES SUMMARY。
+
+
+7.
+$PW_DIR/oof_pairwise_mces.log
+
+作用：
+- MCES 计算运行日志。
+
+状态：
+VERIFIER OOF EVAL LOG。
+
+
+8.
+$PW_DIR/logs/fold2_train.log
+$PW_DIR/logs/fold3_train.log
+$PW_DIR/logs/fold4_train.log
+$PW_DIR/logs/fold5_train.log
+
+作用：
+- 各 OOF fold Qwen LoRA 训练日志；
+- 可恢复训练参数、step、output_dir。
+
+状态：
+VERIFIER OOF TRAIN LOG。
+
+
+======================================================================
+十七、Pairwise Verifier 模型权重
+======================================================================
+
+A. Base model
+
+路径：
+/u01/liukangjun/Qwen3-14B
+
+作用：
+- Pairwise verifier LoRA 的基础模型；
+- checkpoint-194 只是 adapter，不是完整 14B base weights；
+- 真正迁移部署必须同时有 base model + LoRA。
+
+状态：
+FINAL BASE MODEL。
+
+
+B. 最终 Pairwise Structure Verifier
+
+最终路径：
+
+$PW_DIR/final_v2/qwen3_14b_pairwise_lora_v2/v1-20260825-144347/checkpoint-194
+
+完整路径：
+/u01/liukangjun/NC/exp3/ourllm/DistilledStructureCoT/massspec_sirius_pipeline/work/predicted_formula_multihyp_v1/cross_formula/xgb_oof_v1/pairwise_verifier_v2/final_v2/qwen3_14b_pairwise_lora_v2/v1-20260825-144347/checkpoint-194
+
+作用：
+- 论文结构层 selective pairwise Qwen3-14B verifier 的最终 LoRA；
+- 4,652 SFT records 全量训练 1 epoch；
+- 总 step = 194；
+- best_model_checkpoint=None；
+- checkpoint-194 是 last/final checkpoint。
+
+状态：
+OFFICIAL FINAL STRUCTURE VERIFIER MODEL。
+
+
+C. final_v2 训练记录
+
+1.
+$PW_DIR/final_v2/train.log
+
+作用：
+- 保存最终 checkpoint-194 的完整训练命令和训练日志；
+- 关键参数：
+  base = Qwen3-14B
+  LoRA rank = 8
+  alpha = 32
+  dropout = 0.05
+  target = all-linear
+  epoch = 1
+  micro batch = 1
+  grad accumulation = 24
+  effective batch = 24
+  learning rate = 1e-5
+  max length = 8192
+  warmup ratio = 0.05
+  weight decay = 0.1
+  BF16
+  seed = 20260820
+  split_dataset_ratio = 0
+
+状态：
+FINAL TRAINING RECORD。
+
+
+2.
+$PW_DIR/final_v2/adapter_path.txt
+
+作用：
+- 明确记录最终 adapter 指向 checkpoint-194；
+- 防止以后混淆旧 checkpoint。
+
+状态：
+FINAL POINTER。
+
+
+D. checkpoint 目录中每类文件的意义
+
+以下文件名在各 swift LoRA checkpoint 中反复出现，
+checkpoint-194 应按“整个目录”原样保留。
+
+1. adapter_model.safetensors
+- LoRA adapter 真正训练权重；
+- 最重要模型文件。
+
+2. adapter_config.json
+- PEFT / LoRA 结构配置；
+- rank、target modules 等部署所需配置。
+
+3. training_args.bin
+- HuggingFace / trainer 训练参数序列化文件。
+
+4. trainer_state.json
+- global step、epoch、log history、save state 等。
+
+5. additional_config.json
+- ms-swift / adapter 附加配置。
+
+6. scheduler.pt
+- 学习率 scheduler 状态；
+- 主要用于断点续训。
+
+7. optimizer.pt
+- optimizer 状态；
+- 主要用于断点续训；
+- 体积较大，但做完整可恢复备份建议保留。
+
+8. rng_state.pth
+- 随机数状态；
+- 用于尽可能恢复训练状态。
+
+9. README.md
+- PEFT adapter metadata / 使用说明。
+
+10. args.json
+- ms-swift 实际运行参数；
+- 复现实验极其重要。
+
+11. logging.jsonl
+- 训练过程逐 step / epoch 日志。
+
+12. deploy_result/<timestamp>.jsonl
+- checkpoint 部署/测试时产生的输出；
+- 主要见 OOF checkpoints。
+
+完整备份原则：
+不要只拷 adapter_model.safetensors，
+应整个 checkpoint-194 和上一级 v1-20260825-144347/ 一起备份。
+
+
+E. OOF development checkpoints
+
+1.
+Fold1:
+$PW_DIR/fold1_pilot/qwen3_14b_pairwise_lora_v2/v0-20260820-142923/checkpoint-149
+
+2.
+Fold2:
+$PW_DIR/fold2_oof/qwen3_14b_pairwise_lora_v2/v0-20260820-162045/checkpoint-164
+
+3.
+Fold3:
+$PW_DIR/fold3_oof/qwen3_14b_pairwise_lora_v2/v0-20260820-162045/checkpoint-142
+
+4.
+Fold4:
+$PW_DIR/fold4_oof/qwen3_14b_pairwise_lora_v2/v0-20260820-162046/checkpoint-167
+
+5.
+Fold5:
+$PW_DIR/fold5_oof/qwen3_14b_pairwise_lora_v2/v0-20260820-171643/checkpoint-156
+
+作用：
+- 验证 Pairwise Verifier protocol 的 OOF development；
+- 不用于最终 17,556 test 的正式部署；
+- 用于证明 train/holdout 隔离和设计选择。
+
+状态：
+DEVELOPMENT / OOF ONLY。
+
+
+======================================================================
+十八、Top-10 Cross-formula XGB 目录
+======================================================================
+
+路径：
+$ROOT10/xgb_oof_v1/
+
+作用：
+- Predicted Formula Top-10 条件下重新构建的 cross-formula rank dataset；
+- 进行与 Top-10 candidate pool 对应的 XGB OOF ranking；
+- 最终 22.75/29.22 主结果的 XGB 上游。
+
+建议整个目录保留。
+
+其中如果存在以下文件，其作用与原 BASE 对应：
+
+1. rank_dataset_stats.json
+- Top10 XGB dataset stats。
+
+2. rank_features.jsonl
+- Top10 candidate base features。
+
+3. rank_features_rdkit.jsonl
+- Top10 + RDKit features。
+
+4. rank_labels.jsonl
+- Top10 exact identity supervision。
+
+5. sample_manifest.jsonl
+- Top10 sample / group / fold manifest。
+
+6. oof_candidate_scores.jsonl
+- Top10 XGB OOF candidate scores。
+
+7. oof_predictions.jsonl
+- Top10 XGB OOF candidate ordering。
+
+8. oof_summary.json
+- Top10 XGB summary。
+
+9. oof_predictions_with_truth.jsonl
+- 仅评价用。
+
+重要：
+当前没有确认一个统一持久化的最终 XGB model weight。
+因此必须保留整个 xgb_oof_v1/ 目录，而不能只找“模型权重”。
+
+
+======================================================================
+十九、Top-10 Pairwise LLM 最终输出
+======================================================================
+
+目录：
+$ROOT10/pairwise_margin01/
+
+作用：
+- 在 Top-10 Formula 主实验 XGB ranking 后应用最终 checkpoint-194；
+- margin gate = 0.1；
+- challenger ranks = 2..5；
+- 双向确认；
+- 只修改 Top-1；
+- 不生成新结构；
+- 不改变 global Top-10 candidate set 的成员集合。
+
+核心文件：
+
+1.
+$ROOT10/pairwise_margin01/final_margin01_predictions.jsonl
+
+作用：
+- 论文实验三正式主模型 prediction；
+- N = 17,556；
+- 不包含 empty rescue；
+- 当前正式主结果来源。
+
+状态：
+OFFICIAL FINAL MAIN PREDICTION。
+
+
+2.
+pairwise_margin01/ 下的 raw pairwise prediction / comparison / summary / log 文件
+
+作用：
+- 保存被 margin<=0.1 触发的样本；
+- Rank1 vs Rank2-5 的 A/B responses；
+- confirmed challengers；
+- final promoted rank；
+- API runtime/error 等。
+
+状态：
+FINAL INFERENCE PROVENANCE。
+建议整个 pairwise_margin01/ 目录保留。
+
+
+======================================================================
+二十、正式评价代码
+======================================================================
+
+1.
+$PROJECT/scripts/168_eval_pairwise_oof_fast.py
+
+作用：
+- 最终 Top-1 / Top-10 exact accuracy；
+- 2D InChIKey first block；
+- ECFP4@1 / ECFP4@10；
+- ECFP4 = Morgan fingerprint radius2 / 2048 bits；
+- invalid / missing predictions = exact 0, ECFP4 0。
+
+状态：
+FINAL FAST EVALUATOR。
+
+
+2.
+$PROJECT/scripts/compute_mces.py
+
+作用：
+- 最终 MCES@1 / MCES@10；
+- MassSpecGym-compatible myopic MCES；
+- threshold = 15；
+- always_stronger_bound = True；
+- invalid/missing = 100；
+- cap = 100；
+- 全部 17,556 样本进入 denominator；
+- 支持多进程。
+
+状态：
+FINAL MCES EVALUATOR。
+
+
+3.
+$PROJECT/04_evaluate_massspecgym_fixed.py
+
+已确认实际存在于项目根目录。
+
+作用：
+- 统一固定的 MassSpecGym-compatible evaluator；
+- 明确写死：
+  myopic-mces == 1.0.0
+  PuLP == 2.9.0
+  threshold = 15
+  always_stronger_bound = True
+  invalid/missing MCES = 100
+  MCES@K = first K minimum
+  ECFP4 radius2 / 2048
+  2D InChIKey first block
+- 带 SQLite MCES cache 支持；
+- MCES 计算异常时不偷偷替换成 numeric score，
+  而是终止并保存 diagnostics。
+
+状态：
+FINAL FIXED REFERENCE EVALUATOR。
+
+
+======================================================================
+二十一、评价结果文件
+======================================================================
+
+【Top-10 正式主模型】
+
+正式 prediction：
+$ROOT10/pairwise_margin01/final_margin01_predictions.jsonl
+
+最终固定：
+Top1 = 3994 / 17556 = 22.75%
+Top10 = 5130 / 17556 = 29.22%
+ECFP4@1 = 0.4453
+ECFP4@10 = 0.5311
+MCES@1 = 14.736329...
+MCES@10 = 10.607200...
+Missing = 13
+
+pairwise_margin01/ 或相邻评价目录中应整体保留以下文件族：
+
+1. *fast_metrics*.json
+- Top1/Top10/ECFP4 summary。
+
+2. *with_truth*.jsonl
+- 独立 evaluator truth attachment；
+- 不属于 predictor output。
+
+3. *mces_summary*.json
+- MCES 汇总。
+
+4. *mces_details*.jsonl
+- 每 spectrum MCES 明细。
+
+5. *.log
+- evaluator / MCES runtime log。
+
+6. *audit*.json
+- sample count、missing、errors、merge integrity。
+
+由于当前日志中并未把 Top-10 正式评价的所有具体文件名全部锁定，
+归档时请将 pairwise_margin01/ 和其对应 evaluation 目录整体保留。
+
+
+======================================================================
+二十二、Top-5 受控消融实验
+======================================================================
+
+论文 Fig.3b 消融使用固定 Formula Top-5 条件。
+
+A. Full Top-5 + Formula-Lattice + XGB + LLM
+
+关键最终 prediction：
+
+$PW_DIR/test17556_margin01/final_margin01_predictions_fixed.jsonl
+
+作用：
+- 原 Top-5 Formula 主流程；
+- Formula-Lattice + XGB + Pairwise verifier；
+- canonical merge fix 后的最终文件；
+- 不包含 terminal rescue。
+
+指标：
+Top1 = 22.37%
+Top10 = 28.59%
+MCES@1 = 15.0747
+MCES@10 = 11.0259
+ECFP4@1 = 0.4407
+ECFP4@10 = 0.5244
+Empty = 29
+
+状态：
+OFFICIAL TOP5 CONTROL FOR ABLATION。
+
+
+辅助：
+$PW_DIR/test17556_margin01/margin01_with_truth_fast.jsonl
+
+作用：
+- 评价用 truth-attached / fast-eval 中间文件。
+
+状态：
+TOP5 EVAL ARTIFACT。
+
+
+B. w/o XGB + w/o LLM
+
+固定结果：
+Top1 = 13.03%
+Top10 = 25.68%
+MCES@1 = 16.83
+MCES@10 = 11.24
+ECFP4@1 = 0.3522
+ECFP4@10 = 0.5000
+
+对应候选：
+Top-5 Formula
+→ Formula-Lattice
+→ Global Pool
+→ no XGB
+→ no LLM
+
+相关主要目录：
+$PROJECT/work/predicted_formula_multihyp_v1/lattice/REAL17556_top5/
+
+核心：
+global_formula_structure_pool.jsonl
+
+状态：
+OFFICIAL TOP5 ABLATION。
+
+
+C. w/o Formula-Lattice + w/o XGB + w/o LLM
+
+固定结果：
+Top1 = 12.63%
+Top10 = 19.33%
+MCES@1 = 27.83
+MCES@10 = 24.51
+ECFP4@1 = 0.3176
+ECFP4@10 = 0.3959
+
+对应：
+Top-5 predicted formula branches
+→ raw SIRIUS/MSNovelist candidates
+→ no Formula-Lattice
+→ no XGB
+→ no LLM
+
+状态：
+OFFICIAL TOP5 CUMULATIVE ABLATION。
+
+注意：
+这两行属于 staged/cumulative ablation，
+不是严格 one-factor-only ablation。
+
+
+======================================================================
+二十三、Formula Top-K 机制实验
+======================================================================
+
+总根目录：
+$PROJECT/work/predicted_formula_multihyp_v1/formula_k_analysis/
+
+作用：
+研究 molecular-formula uncertainty retention / propagation。
+
+建议整个目录整体保留。
+
+
+A. pred_top1/
+
+作用：
+- 只传播 formula Rank1；
+- 下游仍使用正式结构生成、Formula-Lattice、XGB、Pairwise；
+- no terminal rescue。
+
+结果：
+Top1  = 16.50%
+Top10 = 20.78%
+ECFP4@1 = 0.3820
+ECFP4@10 = 0.4514
+MCES@1 = 17.70
+MCES@10 = 15.69
+After Formula-Lattice empty = 403。
+
+
+B. pred_top3/
+
+结果：
+Top1 = 21.13%
+Top10 = 27.10%
+ECFP4@1 = 0.4308
+ECFP4@10 = 0.5095
+MCES@1 = 15.37
+MCES@10 = 11.65
+After Formula-Lattice empty = 67。
+
+
+C. pred_top5/
+
+结果：
+Top1 = 22.37%
+Top10 = 28.59%
+ECFP4@1 = 0.4407
+ECFP4@10 = 0.5244
+MCES@1 = 15.0747
+MCES@10 = 11.0259
+After Formula-Lattice empty = 29。
+
+
+D. pred_top10/
+
+即 ROOT10，正式主模型。
+
+结果：
+Top1 = 22.75%
+Top10 = 29.22%
+ECFP4@1 = 0.4453
+ECFP4@10 = 0.5311
+MCES@1 = 14.7363
+MCES@10 = 10.6072
+Before Formula-Lattice empty = 2287
+After Formula-Lattice empty = 13。
+
+
+E. Reference / Oracle Formula
+
+代码：
+$PROJECT/scripts/246_build_oracle_single_formula_input.py
+$PROJECT/scripts/oracle_formula_chemistry.py
+
+作用：
+- 每 spectrum 只使用 reference neutral molecular formula；
+- 不提供 GT adduct；
+- 在 polarity-compatible adducts 中推断 latent adduct；
+- 用于估计 formula-error 不存在时的 downstream upper bound。
+
+结果：
+Top1 = 26.21%
+Top10 = 33.44%
+ECFP4@1 = 0.5028
+ECFP4@10 = 0.5782
+MCES@1 = 10.19
+MCES@10 = 8.41
+After Formula-Lattice empty = 134。
+
+状态：
+MECHANISM / REFERENCE-FORMULA COMPARISON。
+
+
+======================================================================
+二十四、Top-10 Input 构建代码
+======================================================================
+
+1.
+$PROJECT/scripts/248_build_predicted_top10_input.py
+
+作用：
+- 从 Exp1 final_test17556_xgb_llm_v3.jsonl 的 formula shortlist
+  构建最终 Predicted Formula Top-10；
+- 保证已有 Top1-5 与原 Top-5 实验一致；
+- 加入 formula ranks 6-10；
+- 产生最终 Top10 input / branch-related assets。
+
+状态：
+FINAL TOP10 MECHANISM CODE。
+
+
+2.
+$PROJECT/scripts/246_build_oracle_single_formula_input.py
+
+见上：
+构建 reference-formula 条件输入。
+
+状态：
+MECHANISM CODE。
+
+
+3.
+$PROJECT/scripts/oracle_formula_chemistry.py
+
+作用：
+- Oracle/reference formula 条件下计算 formula-associated chemistry；
+- latent adduct inference；
+- mass / ppm / DBE 等；
+- 禁止直接使用 annotated adduct 作为输入。
+
+状态：
+MECHANISM CODE。
+
+
+======================================================================
+二十五、Formula-Lattice Empty Recovery 统计
+======================================================================
+
+该统计来自 Formula-K mechanism experiment。
+
+Before Formula-Lattice → After Formula-Lattice：
+
+Pred Top1:
+3915 → 403
+recovered = 3512
+recovery = 89.71%
+
+Pred Top3:
+2750 → 67
+recovered = 2683
+recovery = 97.56%
+
+Pred Top5:
+2495 → 29
+recovered = 2466
+recovery = 98.84%
+
+Pred Top10:
+2287 → 13
+recovered = 2274
+recovery = 99.43%
+
+Reference Formula:
+3272 → 134
+recovered = 3138
+recovery = 95.90%
+
+这些结果相关的：
+- pre-lattice candidate counts；
+- lattice audit；
+- branch candidate files；
+- global pool stats；
+应随 formula_k_analysis/ 各目录整体保留。
+
+
+======================================================================
+二十六、Empty-pool Rescue 补充实验
+======================================================================
+
+重要：
+该机制已经决定“不进入论文正式主模型”。
+只建议作为 Supplementary / Archive 保留。
+
+根目录：
+$ROOT10/empty_rescue13/
+
+
+A. 空样本 ID
+
+1.
+$ROOT10/empty_rescue13/empty13_ids.txt
+
+作用：
+- 保存 Top-10 main Formula-Lattice 后仍为空的 13 个 sample IDs。
+
+状态：
+SUPPLEMENTARY INPUT。
+
+
+B. Rank11-30 formula extension
+
+2.
+$ROOT10/empty_rescue13/branches/rank11_30_branch_manifest.jsonl
+
+作用：
+- 最早构造的 Rank11-30 rescue manifest；
+- 使用了非标准 branch_id，如 empty13__...__r23；
+- 与 138 parser 的标准 Fxx/hash suffix 不兼容；
+- 属于失败中间版本。
+
+状态：
+DEPRECATED / FAILED RESCUE INTERMEDIATE。
+
+
+3.
+$ROOT10/empty_rescue13/branches/rank11_30_standard_input.jsonl
+
+作用：
+- 13 个 empty samples；
+- 每条含 formula ranks 11-30；
+- 共 260 formula hypotheses；
+- 用于重新生成标准 branch manifest。
+
+状态：
+SUPPLEMENTARY CORRECT INPUT。
+
+
+4.
+$ROOT10/empty_rescue13/branches/rank11_30_standard_branch_manifest.jsonl
+
+作用：
+- 正确标准 branch_id；
+- 260 branches；
+- 用于 rank11-30 SIRIUS rescue。
+
+状态：
+SUPPLEMENTARY CORRECT MANIFEST。
+
+
+5.
+$ROOT10/empty_rescue13/logs/rank11_30_standard_branch_stats.json
+
+作用：
+- Rank11-30 branch build stats。
+
+状态：
+SUPPLEMENTARY AUDIT。
+
+
+C. Rank11-30 SIRIUS
+
+6.
+$ROOT10/empty_rescue13/sirius_input/rank11_30_standard_v2/
+
+作用：
+- 13 × 20 formula hypotheses 的 SIRIUS input。
+
+7.
+$ROOT10/empty_rescue13/sirius_project/rank11_30_standard_v2/
+
+作用：
+- rank11-30 SIRIUS raw project / logs / summaries。
+
+8.
+$ROOT10/empty_rescue13/branch_candidates/rank11_30_standard_v2_sirius_candidates.jsonl
+
+作用：
+- Rank11-30 de novo structures；
+- 最终只有 1/13 empty samples 被 direct generation 救回。
+
+结果：
+13 → 12 empty。
+
+状态：
+SUPPLEMENTARY。
+
+
+D. Selective strict Formula-Lattice rescue
+
+代码：
+$PROJECT/scripts/254_selective_empty12_formula_lattice_fast.py
+
+作用：
+- 只对剩余 12 个 empty samples 做 optimized selective Formula-Lattice；
+- 保持 strict raw donor semantics；
+- 结果：
+  exact donor branches = 0
+  neighbor links = 0
+  rescued = 0
+  still empty = 12。
+
+输出：
+
+9.
+$ROOT10/empty_rescue13/selective_lattice_empty12_fast/branch_candidates_after_lattice.jsonl
+
+10.
+$ROOT10/empty_rescue13/selective_lattice_empty12_fast/selective_lattice_audit.json
+
+状态：
+SUPPLEMENTARY NEGATIVE RESULT。
+
+
+E. Terminal neighbor fallback
+
+代码：
+$PROJECT/scripts/255_terminal_empty13_formula_neighbor_fallback.py
+
+作用：
+- 1 条使用 rank11-30 direct generation；
+- 其余 12 条在 same polarity 下寻找 formula/mass-neighbor donor；
+- 直接借用 donor Top-K structures；
+- 不保证 exact target formula；
+- 因此仅属于 coverage fallback，不属于 strict Formula-Lattice。
+
+输出：
+
+11.
+$ROOT10/empty_rescue13/terminal_formula_neighbor_fallback/rescue13_predictions.jsonl
+
+作用：
+- 13 条 rescue prediction。
+
+12.
+$ROOT10/empty_rescue13/terminal_formula_neighbor_fallback/rescue13_audit.json
+
+作用：
+- 记录：
+  1 rank11_30_direct_generation
+  12 terminal_formula_mass_neighbor_fallback
+  still_empty=0
+  truth_used=False
+
+状态：
+SUPPLEMENTARY ONLY。
+
+
+F. Merge rescue
+
+代码：
+$PROJECT/scripts/256_merge_terminal_rescue13.py
+
+作用：
+- 仅替换原 main prediction 中 13 个 empty rows；
+- 其他非空 17,543 rows 不改变；
+- 生成 supplemental rescue test prediction。
+
+可能目录：
+$ROOT10/empty_rescue13/final_test_with_terminal_rescue/
+
+主要结果文件：
+
+13.
+top10_terminal_rescue13_predictions.jsonl
+
+作用：
+- main Top10 + terminal rescue13 后的完整 17,556 prediction。
+
+14.
+merge_audit.json
+
+作用：
+- audit：
+  baseline empty = 13
+  rescued = 13
+  final empty = 0
+  nonempty rows should remain unchanged。
+
+15.
+fast_metrics.json
+
+结果：
+Top1 = 22.75%
+Top10 = 29.22%
+ECFP4@1 = 0.4454
+ECFP4@10 = 0.5312
+
+16.
+with_truth.jsonl
+
+作用：
+- rescue prediction 的 evaluator truth attachment。
+
+17.
+mces_summary.json
+
+结果：
+MCES@1 = 14.680537
+MCES@10 = 10.549727
+Missing = 0
+Errors = 0
+
+18.
+mces_details.jsonl
+
+作用：
+- rescue 后逐样本 MCES。
+
+状态：
+SUPPLEMENTARY / NOT MAIN。
+
+
+======================================================================
+二十七、MCES Cache / Solver 相关文件
+======================================================================
+
+1.
+mces_cache.sqlite
+或各评价目录中的 *.sqlite
+
+作用：
+- 04_evaluate_massspecgym_fixed.py 可缓存 canonical structure pair 的 MCES；
+- 避免重复运行昂贵 ILP；
+- cache key 与 structure pair / threshold / package version 相关。
+
+状态：
+OPTIONAL BUT HIGHLY RECOMMENDED BACKUP。
+
+
+2.
+*mces_errors.json
+
+作用：
+- 如果某 MCES pair 计算失败，固定 evaluator 会写 diagnostics；
+- 正常最终评价应 Errors=0。
+
+状态：
+DIAGNOSTICS。
+
+
+3.
+*mces.log
+
+作用：
+- workers、progress、solver、threshold 等 runtime 信息。
+
+状态：
+EVAL LOG。
+
+
+======================================================================
+二十八、最终 MCES / ECFP4 评价规则
+======================================================================
+
+为了未来核对 evaluator，当前正式规则必须和代码保持一致：
+
+Exact structure:
+- 2D InChIKey first block exact match。
+
+ECFP4:
+- RDKit Morgan；
+- radius = 2；
+- nBits = 2048；
+- Top-K = first K predictions 中最大 Tanimoto；
+- missing/invalid = 0。
+
+MCES:
+- myopic-mces == 1.0.0；
+- PuLP == 2.9.0；
+- threshold = 15；
+- always_stronger_bound = True；
+- invalid/missing structure = 100；
+- MCES@K = first K 中最小距离；
+- cap = 100；
+- empty Top-K = MCES 100；
+- 全部 17,556 samples 保留在 denominator。
+
+权威代码：
+$PROJECT/04_evaluate_massspecgym_fixed.py
+$PROJECT/scripts/168_eval_pairwise_oof_fast.py
+$PROJECT/scripts/compute_mces.py
+
+
+======================================================================
+二十九、外部软件与训练框架
+======================================================================
+
+A. SIRIUS
+
+版本：
+SIRIUS 6.3.7
+
+作用：
+- formula-conditioned structure generation；
+- MSNovelist denovo-structures。
+
+它不是本项目自训练 checkpoint。
+要复现需要：
+- 安装版本；
+- launcher；
+- input；
+- raw output / parsed candidate；
+- Java runtime。
+
+建议保存：
+SIRIUS path
+SIRIUS version
+Java version。
+
+
+B. RDKit
+
+论文当前 Methods 记录：
+RDKit 2026.03.4
+
+用途：
+- SMILES parsing；
+- canonicalization；
+- molecular formula；
+- graph editing；
+- valence/charge/radical validation；
+- InChIKey；
+- Morgan ECFP4；
+- deterministic structure descriptors。
+
+
+C. XGBoost
+
+用途：
+- cross-formula structure ranking；
+- OOF learning-to-rank。
+
+
+D. Qwen3-14B
+
+路径：
+/u01/liukangjun/Qwen3-14B
+
+用途：
+- Structure Pairwise Verifier base model。
+
+
+E. ms-swift
+
+已知训练框架路径：
+/u01/liukangjun/NC/ms-swift-3.12.0
+
+作用：
+- Qwen3-14B LoRA SFT；
+- final checkpoint-194 由该框架训练。
+
+
+F. conda environment
+
+环境名：
+massspec-sirius
+
+作用：
+- Python / RDKit / XGBoost / MCES / PuLP 等实验环境。
+
+
+======================================================================
+三十、训练/推理日志为什么必须保存
+======================================================================
+
+1. SIRIUS compute/export log
+- 证明每 shard 真正执行；
+- 追踪 failed jobs。
+
+2. Formula-Lattice lattice_audit.json
+- 证明 candidate universe / no truth / no DB / Top1 lock。
+
+3. XGB summary / dataset stats
+- 证明 dataset size / OOF setting。
+
+4. Pairwise fold inference.log
+- 记录 triggered samples、max margin、Top-K、workers、
+  confirmed changes 等。
+
+5. Pairwise fold train logs
+- 记录 LoRA training config。
+
+6. final_v2/train.log
+- checkpoint-194 最权威训练命令来源。
+
+7. evaluator logs
+- 固定 threshold、solver、workers、errors=0。
+
+
+======================================================================
+三十一、历史 / 已弃用 rescue 路线
+======================================================================
+
+以下文件/目录在服务器历史中存在，但不属于当前论文最终实验三主方法。
+建议若空间足够归入 99_DEPRECATED，而不要和 FINAL 混放。
+
+1.
+$PROJECT/scripts/07_llm_rag_rescue.py
+$PROJECT/07_llm_rag_rescue_nonthinking_v3.py
+
+作用：
+- 早期 LLM RAG empty rescue；
+- 最终未采用。
+
+
+2.
+$PROJECT/scripts/08_rank_merge_rescue.py
+
+作用：
+- 早期 rescue candidate rank merge；
+- 未进入最终方法。
+
+
+3.
+$PROJECT/scripts/09_tune_rescue_weights.py
+
+作用：
+- 早期 rescue ranking weight tuning；
+- 未进入最终方法。
+
+
+4.
+$PROJECT/scripts/34_generate_tool_candidates.py
+$PROJECT/scripts/35_score_tool_candidates.py
+
+作用：
+- database-free tool-rescue pilot；
+- 非最终。
+
+
+5.
+$PROJECT/scripts/38_enumerate_anchor_structures.py
+$PROJECT/scripts/39_generate_anchor_constrained_candidates.py
+$PROJECT/scripts/40_score_anchor_candidates.py
+$PROJECT/scripts/41_evaluate_anchor_pool.py
+
+作用：
+- fragment-anchor rescue；
+- 非最终。
+
+
+6.
+$PROJECT/scripts/47_build_component_library.py
+$PROJECT/scripts/48_assemble_loss_partition_candidates.py
+$PROJECT/scripts/49_score_loss_partition_candidates.py
+$PROJECT/scripts/50_evaluate_loss_partition_pool.py
+
+作用：
+- loss-partition rescue；
+- 非最终。
+
+
+7.
+$PROJECT/scripts/91_parse_sirius_retry.py
+
+作用：
+- empty retry SIRIUS parser；
+- 早期 empty rescue。
+
+
+8.
+$PROJECT/scripts/96_generate_formula_candidates.py
+$PROJECT/scripts/97_score_formula_candidates.py
+
+作用：
+- empty71 / agent formula candidate rescue；
+- 非最终。
+
+
+9.
+database_free_pilot100_v1/
+database_free_rescue100_v2/
+database_free_rescue100_fast_v3/
+database_free_tool_rescue100_v4/
+fragment_anchor_rescue100_v5/
+loss_partition_rescue100_v6/
+formula_lattice_pilot100_v8/
+formula_lattice_test1000_v9/
+empty71_hybrid_rescue_v10/
+llm_agent_formula_lattice_test1000_v11/
+llm_agent_formula_lattice_test17556_v11/
+pubchem_llm_rescue_v5_package/
+
+作用：
+- 实验三方法开发过程中不同 rescue / pilot / alternative strategy 的历史目录；
+- 不进入 V0903 当前主模型；
+- 建议单独 99_DEPRECATED 归档。
+
+
+======================================================================
+三十二、旧 Structure LLM / CoT 相关目录
+======================================================================
+
+服务器历史中还存在：
+
+/u01/liukangjun/NC/exp3/ourllm/qwen3_14b_de_novo_sft/
+/u01/liukangjun/NC/exp3/ourllm/qwen3_14b_ms_swift_sft/
+/u01/liukangjun/NC/exp3/ourllm/qwen3_14b_ms_swift_sft_oracle/
+
+以及 build_distilled_formula_guided_cot_* 等。
+
+作用：
+- 早期尝试“LLM直接从 spectrum/formula 生成结构”或 CoT distillation；
+- 当前论文最终实验三已经改为：
+  SIRIUS/MSNovelist generation +
+  Formula-Lattice +
+  XGB +
+  Pairwise Verifier；
+- 这些旧 SFT 不属于最终 checkpoint-194 的训练链。
+
+状态：
+HISTORICAL / DEPRECATED EXP3 ROUTE。
+
+
+======================================================================
+三十三、建议最终备份目录结构
+======================================================================
+
+建议：
+
+EXP3_FINAL_ARCHIVE_20260903/
+│
+├── 00_README/
+│   └── 实验三_最终版本全部文件说明_20260903.txt
+│
+├── 01_CODE_FINAL/
+│   ├── input_branch/
+│   ├── sirius/
+│   ├── formula_lattice/
+│   ├── xgb/
+│   ├── pairwise_verifier/
+│   └── evaluation/
+│
+├── 02_SHELL_FINAL/
+│   ├── 143_run_multiformula_sirius_sharded.sh
+│   ├── 144_run_global_multihyp_lattice.sh
+│   ├── 164_prepare_pairwise_folds_2to5.sh
+│   └── oracle_working_sirius_runner.sh
+│
+├── 03_DATA_UPSTREAM/
+│   ├── MassSpecGym1.5.json
+│   └── final_test17556_xgb_llm_v3.jsonl
+│
+├── 04_TOP10_MAIN/
+│   └── pred_top10/
+│
+├── 05_FORMULA_LATTICE_FROZEN/
+│   ├── REAL17556_candidate_pool_v1/
+│   └── REAL2643_candidate_pool_v1/
+│
+├── 06_XGB_TOP5_DEV_ABLATION/
+│   └── xgb_oof_v1/
+│
+├── 07_PAIRWISE_VERIFIER/
+│   ├── TRAIN_DATA/
+│   ├── OOF/
+│   └── FINAL_V2/
+│
+├── 08_MODELS/
+│   ├── Qwen3-14B/
+│   ├── checkpoint-194/
+│   └── OOF_checkpoints/
+│
+├── 09_FORMULA_K_ANALYSIS/
+│   ├── pred_top1/
+│   ├── pred_top3/
+│   ├── pred_top5/
+│   ├── pred_top10/
+│   └── reference_formula/
+│
+├── 10_TOP5_ABLATION/
+│
+├── 11_SUPPLEMENTARY_EMPTY_RESCUE/
+│   └── empty_rescue13/
+│
+├── 12_EVALUATION/
+│   ├── fast/
+│   ├── mces/
+│   └── cache/
+│
+├── 13_ENVIRONMENT/
+│
+└── 99_DEPRECATED/
+    ├── old_rescue/
+    ├── old_formula_lattice/
+    ├── old_llm_selector/
+    └── old_direct_structure_sft/
+
+
+======================================================================
+三十四、最重要 FINAL 文件索引
+======================================================================
+
+如果以后只想快速确认“论文最终实验三到底是哪几个文件”，看这一节。
+
+【上游输入】
+1.
+$PROJECT/exp1_output/final_test17556_xgb_llm_v3.jsonl
+
+【Top10 Formula】
+2.
+$ROOT10/data/pred_top10_input.jsonl
+
+3.
+$ROOT10/branches/branch_manifest.jsonl
+
+【SIRIUS/MSNovelist】
+4.
+$PROJECT/scripts/143_run_multiformula_sirius_sharded.sh
+
+5.
+$PROJECT/scripts/134_build_multiformula_sirius_input.py
+
+6.
+$PROJECT/scripts/138_parse_multiformula_denovo_summary.py
+
+7.
+$ROOT10/branch_candidates/top10_sirius_candidates.jsonl
+
+【Formula-Lattice】
+8.
+$PROJECT/scripts/80_formula_lattice_predict.py
+
+9.
+$PROJECT/scripts/140_multihyp_formula_lattice_predict.py
+
+10.
+$PROJECT/scripts/144_run_global_multihyp_lattice.sh
+
+11.
+$PROJECT/scripts/136_build_global_formula_structure_pool.py
+
+12.
+$ROOT10/lattice/branch_candidates_after_lattice.jsonl
+
+13.
+$ROOT10/lattice/lattice_audit.json
+
+14.
+$ROOT10/lattice/global_formula_structure_pool.jsonl
+
+15.
+$ROOT10/lattice/global_pool_stats.json
+
+【XGB】
+16.
+$PROJECT/scripts/150_build_cross_formula_rank_dataset.py
+
+17.
+$PROJECT/scripts/210_add_rdkit_features.py
+
+18.
+$PROJECT/scripts/151_oof_xgb_cross_formula_ranker_rdkit.py
+
+19.
+$ROOT10/xgb_oof_v1/
+
+【Pairwise Verifier】
+20.
+$PROJECT/scripts/160_build_pairwise_verifier_v2.py
+
+21.
+$PROJECT/scripts/162_run_pairwise_fold1_api.py
+
+22.
+$PW_DIR/pairwise_supervised_full.jsonl
+
+23.
+$PW_DIR/pairwise_context.jsonl
+
+24.
+$PW_DIR/pairwise_dataset_stats.json
+
+25.
+$PW_DIR/final_v2/train.log
+
+26.
+$PW_DIR/final_v2/adapter_path.txt
+
+27.
+$PW_DIR/final_v2/qwen3_14b_pairwise_lora_v2/v1-20260825-144347/checkpoint-194/
+
+【最终 prediction】
+28.
+$ROOT10/pairwise_margin01/final_margin01_predictions.jsonl
+
+【最终 evaluator】
+29.
+$PROJECT/scripts/168_eval_pairwise_oof_fast.py
+
+30.
+$PROJECT/scripts/compute_mces.py
+
+31.
+$PROJECT/04_evaluate_massspecgym_fixed.py
+
+【机制实验】
+32.
+$PROJECT/scripts/248_build_predicted_top10_input.py
+
+33.
+$PROJECT/scripts/246_build_oracle_single_formula_input.py
+
+34.
+$PROJECT/scripts/oracle_formula_chemistry.py
+
+35.
+$PROJECT/work/predicted_formula_multihyp_v1/formula_k_analysis/
+
+【Top5 ablation】
+36.
+$PROJECT/work/predicted_formula_multihyp_v1/lattice/REAL17556_top5/
+
+37.
+$PW_DIR/test17556_margin01/final_margin01_predictions_fixed.jsonl
+
+【frozen】
+38.
+$PROJECT/work/predicted_formula_multihyp_v1/frozen/REAL17556_candidate_pool_v1/
+
+39.
+$PROJECT/work/predicted_formula_multihyp_v1/frozen/REAL2643_candidate_pool_v1/
+
+
+======================================================================
+三十五、归档时的优先级
+======================================================================
+
+P0：绝对不能丢
+- final_test17556_xgb_llm_v3.jsonl
+- pred_top10/
+- scripts/80_formula_lattice_predict.py
+- scripts/140_multihyp_formula_lattice_predict.py
+- scripts/136_build_global_formula_structure_pool.py
+- scripts/150_build_cross_formula_rank_dataset.py
+- scripts/210_add_rdkit_features.py
+- scripts/151_oof_xgb_cross_formula_ranker_rdkit.py
+- scripts/160_build_pairwise_verifier_v2.py
+- scripts/162_run_pairwise_fold1_api.py
+- scripts/168_eval_pairwise_oof_fast.py
+- scripts/compute_mces.py
+- 04_evaluate_massspecgym_fixed.py
+- pairwise_supervised_full.jsonl
+- pairwise_context.jsonl
+- checkpoint-194
+- Qwen3-14B base model
+- final_margin01_predictions.jsonl
+- frozen REAL17556 code
+
+P1：强烈建议保留
+- 全部 XGB feature/label/manifest/OOF data
+- Pairwise OOF fold data + checkpoints
+- Formula Top-K mechanism directories
+- Top5 ablation
+- SIRIUS raw project / logs
+- MCES cache
+- training/inference logs
+
+P2：补充/历史
+- empty_rescue13
+- terminal fallback
+- old rescue packages
+- old Formula-Lattice pilot
+- old LLM selector
+- old direct structure SFT / CoT
+
+
+======================================================================
+三十六、建议额外生成的现场清单
+======================================================================
+
+在服务器最终整理前，建议执行：
+
+cd /u01/liukangjun/NC/exp3/ourllm/DistilledStructureCoT/massspec_sirius_pipeline
+
+find . -type f -printf '%p\t%s bytes\t%TY-%Tm-%Td %TH:%TM:%TS\n' \
+  | sort \
+  > EXP3_FULL_FILE_MANIFEST_20260903.txt
+
+find scripts -maxdepth 1 -type f -name '*.py' | sort \
+  > EXP3_ALL_PY_FILES_20260903.txt
+
+find . -type f -name '*.sh' | sort \
+  > EXP3_ALL_SH_FILES_20260903.txt
+
+find work/predicted_formula_multihyp_v1 -type f | sort \
+  > EXP3_ALL_WORK_FILES_20260903.txt
+
+这样可以补足本说明无法直接在线遍历服务器当前文件系统的限制，
+并形成一个“服务器当时实际存在什么”的最终证据清单。
+
+
+======================================================================
+三十七、最终 SHA256 建议
+======================================================================
+
+完整备份结束后：
+
+cd /你的/EXP3_FINAL_ARCHIVE_20260903
+
+find . -type f \
+  ! -name 'SHA256SUMS.txt' \
+  -print0 \
+  | sort -z \
+  | xargs -0 sha256sum \
+  > SHA256SUMS.txt
+
+以后检查：
+
+sha256sum -c SHA256SUMS.txt
+
+作用：
+- 防止 JSONL 被覆盖；
+- 防止代码后续被修改却不知道；
+- 检查 checkpoint 是否复制完整；
+- 为论文代码公开 / 复现提供版本证据。
+
+
+======================================================================
+三十八、最终一句话定义
+======================================================================
+
+实验三当前正式论文版本可以概括为：
+
+“实验一输出的 Top-10 分子式假设被展开为独立结构生成分支，经
+SIRIUS 6.3.7/MSNovelist 产生候选后，通过 Multi-Hypothesis Formula-Lattice
+进行同分子式跨谱迁移和固定分子式邻域图编辑，随后将不同分子式分支合并
+成 Global Formula-Structure Pool，利用 identity-disjoint 5-fold OOF XGBoost
+完成跨分子式结构排序，并仅对 XGB Top-1/Top-2 margin < 0.1 的困难样本调用
+Qwen3-14B LoRA Pairwise Verifier，在 Rank1 与 Rank2-5 的双向比较中确认是否
+提升 challenger。最终以 2D InChIKey exact match、ECFP4 和 MassSpecGym-compatible
+MCES 评价全部 17,556 条 test spectra。”
+
+正式主结果：
+Top-1 = 22.75%
+Top-10 = 29.22%
+ECFP4@1 = 0.4453
+ECFP4@10 = 0.5311
+MCES@1 = 14.7363
+MCES@10 = 10.6072
+Empty = 13
+
+terminal empty rescue 不属于正式主模型。
+
+======================================================================
+END
+======================================================================

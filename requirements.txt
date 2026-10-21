@@ -1,0 +1,16 @@
+# Python dependencies for the MassSpecGym formula-prediction & de-novo structure pipeline.
+#
+# External (non-pip) tools are also required — see README.md "Environment":
+#   - SIRIUS 6.3.7  (https://boecker-lab.github.io/sirius.io/) + Java
+#   - ms-swift      (https://github.com/modelscope/ms-swift)
+#   - vLLM          (LoRA deploy backend for the Qwen3-14B adapters)
+rdkit>=2024.0
+numpy
+xgboost
+pandas
+scikit-learn
+pulp==2.9.0
+myopic-mces==1.0.0
+requests
+tqdm
+torch

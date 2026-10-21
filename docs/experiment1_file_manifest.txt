@@ -1,0 +1,762 @@
+实验一：分子式预测
+最终版本文件整理与备份说明
+日期：2026-09-03
+
+======================================================================
+一、最终版本总览
+======================================================================
+
+本文件用于说明“实验一：分子式预测”最终备份目录中每个文件的作用、所属类别、相互关系以及是否属于最终正式流程。
+
+最终正式流程：
+
+MassSpecGym 原始谱图
+  ↓
+Broad Candidate Pool
+  V3 Top50 + OLD Top400 + Direct Top5 + V3-F Top15
+  ↓
+XGBoost 全局排序
+  ↓
+Top30
+  ↓
+normalized margin z < 0.15 的样本进入 LLM
+  ↓
+Qwen3-14B Override V3 / checkpoint-80
+  ↓
+KEEP / SWAP
+  ↓
+合并回完整 test17556
+  ↓
+eval_override_v2.py
+  ↓
+六项正式指标
+
+当前最终六指标：
+Top-1 Accuracy      = 63.87%
+Top-3 Accuracy      = 77.34%
+Top-5 Accuracy      = 81.44%
+Mass-valid Rate     = 91.25%
+Formula Validity    = 100.00%
+Adduct Accuracy     = 79.90%
+
+最终正式 LLM：Override V3 / checkpoint-80
+最终正式 XGB：preranker_xgb_train20000_val3000.json
+最终正式 evaluator：eval_override_v2.py
+最终正式 validation：preranker_val3000_confirm.*
+最终正式 test：MassSpecGym test split，N = 17,556
+
+
+======================================================================
+二、外部依赖
+======================================================================
+
+1. MassSpecGym1.5.json
+原服务器路径：
+/u01/liukangjun/NC/Data/MassSpecGym/MassSpecGym1.5.json
+
+作用：
+- 实验一 train / validation / test 的原始数据来源。
+- test split 共 17,556 条。
+- 正式 test 不参与 XGB、Listwise SFT 或 Override V3 的参数更新。
+
+2. Qwen3-14B base model
+原服务器路径：
+/u01/liukangjun/Qwen3-14B
+
+作用：
+- 第一阶段 Listwise SFT 的基础模型。
+- 第二阶段 Override V3 在第一阶段 checkpoint-1227 基础上继续专门化 SFT。
+
+
+======================================================================
+三、核心 Python 代码
+======================================================================
+
+1. build_broad_preranker_dataset.py
+类别：Broad Candidate Pool 主构造代码
+作用：
+- 最终候选池主程序。
+- 统一运行 V3、OLD、Direct 和 V3-F reserved lane。
+- 最终 practical broad pool：
+  V3 broad Top50 ∪ OLD Top400 ∪ Direct Top5 ∪ V3-F Top15
+  然后按 neutral formula 去重。
+- 构造 XGBoost 所需的 61 维候选特征。
+- 输出 X、y、groups、meta、audit、features、dataset 等 ranking dataset 文件。
+状态：FINAL，必须保留。
+
+2. eval_final_candidate_union_2000.py
+类别：候选生成底层基础代码
+作用：
+- 为 Broad Pool builder 提供底层 V3 / OLD / chemical rule 实现。
+- 包括 formula parsing、exact mass、adduct、DBE、氮规则、元素比例等。
+- 包括或调用 extension signatures、carbon_range_v3、enumerate_chno、
+  enumerate_legacy_8、enumerate_extension、build_old、build_direct 等。
+状态：FINAL，必须保留。
+
+3. build_formula_nothink_sft_v4_listwise_zh_resume.py
+类别：第一阶段 Listwise 数据构造及候选 metadata 代码
+作用：
+- 第一阶段 Listwise SFT 的关键数据构造程序。
+- Broad Pool 特征构造也依赖其中的 best_mass_matched_adduct 等逻辑。
+- BestAdduct 是基于候选 formula + precursor m/z + polarity 计算的 latent adduct，
+  不是数据中的真实 adduct。
+状态：FINAL 依赖。
+
+4. mz_formula_candidates.py
+类别：Direct 候选生成底层规则
+作用：
+- Direct / fragment-guided candidate generation。
+- 用 precursor 和 MS/MS fragment evidence 补充候选。
+状态：FINAL 依赖。
+
+5. train_xgb_broad_preranker.py
+类别：XGBoost 训练代码
+作用：
+- 使用 candidate-level ranking dataset 训练最终 XGB。
+- objective = rank:pairwise
+- eval_metric = ndcg@30
+- 最终输出模型：preranker_xgb_train20000_val3000.json
+状态：FINAL。
+
+6. export_preranker_shortlist.py
+类别：XGBoost 推理 / Top30 导出代码
+作用：
+- 加载最终 XGB。
+- 对每个 Broad Pool candidate 打分。
+- 全局排序并导出每个 spectrum 的 Top30。
+- 正式 test 输出：
+  preranker_test17556_all_top30_xgb20k_val3000.jsonl
+状态：FINAL。
+
+7. build_override_sft_v3.py
+类别：Override V3 数据构造代码
+作用：
+- 构造最终 V3 train / dev。
+- 输出：
+  override_sft_v3_train_mixed.jsonl
+  override_sft_v3_dev_mixed.jsonl
+  override_sft_v3_summary.json
+- V3 train 约为：
+  SWAP 608 + KEEP 1000 + Listwise replay 300 = 1908。
+- SWAP 定义：
+  Rank1 != gold 且 Rank2 == gold。
+- KEEP 定义：
+  Rank1 == gold，或 Rank1 / Rank2 都不是 gold。
+状态：FINAL。
+
+8. infer_override_deploy.py
+类别：最终 LLM API 推理客户端
+作用：
+- 调用部署后的 Override V3。
+- 仅处理 z < 0.15 的低置信样本。
+- 输出 KEEP / SWAP。
+- 不允许生成候选池外的新分子式。
+状态：FINAL。
+
+9. merge_override_full_test.py
+类别：结果合并代码
+作用：
+- 把 gated subset 上的 KEEP / SWAP 合并回完整 test17556。
+- 未进入 gate 的样本保持 XGB 排名。
+- 生成 final_test17556_xgb_llm_v3.jsonl。
+状态：FINAL。
+
+10. eval_override_v2.py
+类别：最终正式六指标 evaluator
+作用：
+- 当前实验一唯一认可的正式评价程序。
+- 正确应用 KEEP/SWAP 后的最终排序。
+- 计算 Top-1、Top-3、Top-5、Mass-valid、Formula Validity、Adduct Accuracy。
+- Formula Validity 定义为：
+  可解析 AND DBE valid AND nitrogen-rule valid AND element-ratio valid。
+状态：FINAL，论文和最终结果只认这一版。
+
+
+======================================================================
+四、Shell 命令脚本
+======================================================================
+
+1. train_formula_nothink_14b_10k.sh
+类别：第一阶段 Listwise SFT 正式训练脚本
+作用：
+- 数据：formula_nothink_sft_v4_train10k.jsonl
+- 通过 swift sft 训练 Qwen3-14B no-thinking Listwise 模型。
+- 输出目录：
+  outputs/sft_model/20260817-14B-nothink-listwise-10k
+- 最终采用：
+  v1-20260818-003315/checkpoint-1227
+说明：
+- 第一阶段没有单独 YAML，主要训练参数由该 shell 的 CLI 参数和 checkpoint args.json 锁定。
+状态：FINAL。
+
+2. train_formula_override_14b_v3.sh
+类别：第二阶段 Override V3 正式训练脚本
+作用：
+- 初始化 adapter：第一阶段 checkpoint-1227。
+- 训练数据：override_sft_v3_train_mixed.jsonl
+- dev 数据：override_sft_v3_dev_mixed.jsonl
+- 通过 swift sft 训练最终 Override V3。
+- 最终采用 checkpoint-80。
+状态：FINAL。
+
+3. deploy_override_v3_FINAL.sh
+类别：最终 LLM 部署脚本
+作用：
+- swift deploy + vLLM 部署 checkpoint-80。
+- 核心固定项：
+  base model = Qwen3-14B
+  adapter = checkpoint-80
+  temperature = 0
+  max_new_tokens = 32
+  enable_thinking = false
+- GPU 编号、显存利用率可按服务器调整。
+状态：FINAL。
+
+
+======================================================================
+五、模型权重与模型运行目录
+======================================================================
+
+1. 第一阶段 Listwise SFT checkpoint/
+类别：第一阶段 LLM 权重目录
+内容：
+- checkpoint-1227/
+- args.json
+- logging.jsonl
+作用：
+- 第一阶段 formula-domain Listwise SFT 最终模型。
+- 第二阶段 Override V3 的初始化 adapter。
+建议保留 checkpoint-1227 内：
+adapter_model.safetensors、adapter_config.json、args.json、trainer_state.json
+以及其他训练状态文件。
+状态：FINAL。
+
+2. 最终使用的 LLM checkpoint/
+类别：最终 LLM 权重目录
+内容：
+- checkpoint-80/
+- args.json
+- logging.jsonl
+原服务器对应：
+outputs/sft_model/20260821-14B-override-v3/v0-20260820-220041/checkpoint-80
+作用：
+- 实验一最终 selective override verifier。
+- test17556 中 gated = 1549，最终 KEEP = 1549，SWAP = 0。
+状态：FINAL。
+
+3. preranker_xgb_train20000_val3000.json
+类别：最终 XGBoost 模型权重
+最终参数已由 summary 锁定：
+xgboost_version = 3.2.0
+objective = rank:pairwise
+eval_metric = ndcg@30
+eta = 0.05
+max_depth = 8
+min_child_weight = 5
+subsample = 0.85
+colsample_bytree = 0.9
+lambda = 5
+alpha = 0
+tree_method = hist
+nthread = 16
+seed = 42
+device = cuda
+best_iteration = 381
+best_score = 0.8553282175201635
+状态：FINAL。
+
+
+======================================================================
+六、第一阶段 Listwise SFT 数据
+======================================================================
+
+formula_nothink_sft_v4_train10k.jsonl
+类别：第一阶段 LLM 训练数据
+作用：
+- 10k no-thinking Listwise formula reranking 数据。
+- 让 Qwen3-14B 先学习质谱、候选分子式和候选排序领域知识。
+- V3 中另抽取 300 条同类数据作为 replay，减轻 catastrophic forgetting。
+状态：FINAL TRAIN DATA。
+
+
+======================================================================
+七、Override V2 / V3 训练与数据隔离文件
+======================================================================
+
+1. override_sft_v2_manifest.jsonl
+类别：Override supervision provenance
+作用：
+- 记录用于构造后续 V3 的 override 样本来源和标签依据。
+- 典型字段包括 identifier、split、class、z_margin、
+  true_formula、r1_formula、r2_formula。
+- 用于追溯 KEEP / SWAP 标签并审计数据隔离。
+状态：重要 provenance。
+
+2. override_sft_v3_train_mixed.jsonl
+类别：V3 最终训练集
+作用：
+- checkpoint-80 实际使用的最终 train JSONL。
+- 约 608 SWAP + 1000 KEEP + 300 replay = 1908。
+状态：FINAL TRAIN DATA。
+
+3. override_sft_v3_dev_mixed.jsonl
+类别：V3 内部 dev 集
+作用：
+- V3 训练期间的 held-out internal dev。
+状态：FINAL DEV DATA。
+
+4. override_sft_v3_summary.json
+类别：V3 数据统计
+作用：
+- 记录 train / dev 数量和类别组成。
+状态：FINAL AUDIT。
+
+
+======================================================================
+八、XGBoost 最终训练数据
+======================================================================
+
+最终 Train prefix：
+preranker_train20000
+
+最终指纹：
+groups = 18,067
+rows   = 2,488,266
+
+1. preranker_train20000.X.f32.bin
+- 61 维 candidate feature matrix，float32。
+- 总 candidate rows = 2,488,266。
+
+2. preranker_train20000.y.u8.bin
+- candidate-level label。
+- gold candidate = 1，其余 = 0。
+- 仅用于训练监督。
+
+3. preranker_train20000.groups.i32.bin
+- 每个 spectrum 的 ranking group size。
+- 共 18,067 groups。
+
+4. preranker_train20000.meta.jsonl.gz
+- spectrum / candidate metadata 与 provenance。
+
+5. preranker_train20000.audit.jsonl
+- 候选构建状态、candidate count、drop / error 等审计信息。
+
+6. preranker_train20000.features.json
+- 锁定 61 维 feature schema 及顺序。
+
+7. preranker_train20000.dataset.json
+- 保存 train ranking dataset 配置和统计。
+
+8. preranker_train20000_ids_for_exclude.jsonl
+- 保存 XGB train IDs。
+- 构造 override hard-mining 数据时用于排除这些样本，
+  避免直接在 XGB 自己的训练样本上观察其错误模式。
+
+9. preranker_train20000_ids_for_exclude_summary.json
+- 上述 exclusion ID 的统计。
+
+
+======================================================================
+九、XGBoost 最终 Validation 数据
+======================================================================
+
+最终 Validation prefix 已通过历史 score 指纹锁定为：
+preranker_val3000_confirm
+
+指纹：
+groups = 2,643
+rows   = 753,605
+
+注意：
+preranker_val3000_full 不是最终 validation dataset。
+
+1. preranker_val3000_confirm.X.f32.bin
+- 最终 validation candidate feature matrix。
+
+2. preranker_val3000_confirm.y.u8.bin
+- validation candidate labels。
+
+3. preranker_val3000_confirm.groups.i32.bin
+- 2,643 个 validation ranking groups。
+
+4. preranker_val3000_confirm.meta.jsonl.gz
+- validation spectrum / candidate metadata。
+
+5. preranker_val3000_confirm.audit.jsonl
+- validation candidate-generation 审计。
+
+6. preranker_val3000_confirm.features.json
+- validation 61 维 feature schema。
+
+7. preranker_val3000_confirm.dataset.json
+- validation dataset 配置和统计。
+
+8. preranker_val3000_train20k_scores.f32.bin
+类别：历史 validation XGB score 指纹
+作用：
+- 最终 XGB 对 validation candidate rows 的历史 score。
+- 已用于确认 preranker_val3000_confirm 才是 FINAL VAL。
+- default full-Booster 重新预测 confirm 数据时与历史 score 约 1e-6 级一致。
+- 对 val3000_full 明显不一致。
+状态：强烈建议永久保留。
+
+
+======================================================================
+十、XGBoost 模型统计文件
+======================================================================
+
+1. preranker_xgb_train20000_val3000_summary.json
+类别：最终 XGB training summary
+作用：
+- 锁定最终参数、best_iteration、best_score。
+- 锁定 train / val groups 和 rows。
+- 记录 validation recall、gold rank、feature gain 等。
+状态：FINAL 参数来源。
+
+2. preranker_xgb_train20000_val3000_importance.csv
+类别：XGB feature importance
+作用：
+- 保存各 feature gain。
+- 可用于 Supplementary feature analysis。
+状态：FINAL ANALYSIS。
+
+
+======================================================================
+十一、独立 HardDev / SafetyDev
+======================================================================
+
+1. preranker_fresh_harddev_z030.jsonl
+类别：独立 Fresh HardDev
+作用：
+- 从独立 fresh train records 构造的低-margin development set。
+- 不进入 V3 override training。
+- 用于观察 verifier 在未见 hard cases 上的泛化。
+历史规模：
+N = 1021
+R1_gold = 547
+R2_gold = 301
+both_wrong = 173。
+
+2. preranker_fresh_harddev_z030_ids.txt
+- Fresh HardDev ID 列表，用于 sample-level 隔离检查。
+
+3. preranker_fresh_harddev_z030_summary.json
+- Fresh HardDev 数量、状态、margin 等 summary。
+
+4. preranker_hard_dev2_z030.jsonl
+类别：Safety HardDev
+作用：
+- 另一套低-margin 安全开发集。
+- 更适合观察 LLM 是否破坏已经正确的 XGB Rank1。
+
+5. preranker_hard_dev2_z030_ids.txt
+- Safety HardDev ID 列表。
+
+6. preranker_hard_dev2_z030_summary.json
+- Safety HardDev summary。
+
+
+======================================================================
+十二、完整 test17556 Broad Candidate Pool 文件
+======================================================================
+
+Prefix：
+preranker_test17556_all
+
+1. preranker_test17556_all.X.f32.bin
+- test17556 全部 Broad Pool candidate feature matrix。
+- 是最终 XGB test inference 的底层输入。
+
+2. preranker_test17556_all.y.u8.bin
+- test candidate gold labels，仅用于评价 / audit，不作为推理特征。
+
+3. preranker_test17556_all.groups.i32.bin
+- 每个 test spectrum 的 candidate group size。
+
+4. preranker_test17556_all.meta.jsonl.gz
+- test spectrum / candidate metadata。
+
+5. preranker_test17556_all.audit.jsonl
+- Broad Pool 构建状态和完整性审计。
+
+6. preranker_test17556_all.features.json
+- test 61 维 feature schema。
+
+7. preranker_test17556_all.dataset.json
+- test Broad Pool 构建配置和统计。
+
+
+======================================================================
+十三、XGB Top30 与 LLM Gate 文件
+======================================================================
+
+1. preranker_test17556_all_top30_xgb20k_val3000.jsonl
+类别：最终 test17556 XGB Top30
+作用：
+- Broad Candidate Pool 经最终 XGB 全局排序后导出的 Top30。
+- 是 margin gate、LLM verifier 和最终评价的核心输入。
+状态：FINAL INTERMEDIATE。
+
+2. preranker_test17556_all_top30_xgb20k_val3000_summary.json
+类别：Top30 导出 summary
+作用：
+- 记录 Top30 导出统计和完整性。
+状态：FINAL AUDIT。
+
+3. preranker_test17556_gate015_only.jsonl
+类别：LLM gated subset
+作用：
+- 保存 normalized margin z < 0.15 的 test 样本。
+- gated = 1549 / 17556。
+- 仅这部分调用最终 V3。
+状态：FINAL LLM INPUT。
+
+
+======================================================================
+十四、最终 LLM 推理结果
+======================================================================
+
+override_v3_test17556_gate015_pred.jsonl
+类别：最终 V3 decision 文件
+作用：
+- 保存 1549 个 gated test 样本的 KEEP / SWAP。
+- 当前结果：
+  KEEP = 1549
+  SWAP = 0
+状态：FINAL LLM OUTPUT。
+
+
+======================================================================
+十五、最终完整预测与正式指标
+======================================================================
+
+1. final_test17556_xgb_llm_v3.jsonl
+类别：最终完整样本级预测
+作用：
+- 完整 XGB Top30 + V3 decision 合并后的 17,556 条结果。
+- 是最终样本级结果文件。
+状态：FINAL RESULT。
+
+2. final_test17556_xgb_llm_v3_metrics_OFFICIAL.json
+类别：最终正式 XGB+LLM 六指标
+作用：
+- 由 eval_override_v2.py 生成。
+- 论文、汇报、最终表格应以此为准。
+状态：OFFICIAL FINAL。
+
+3. xgb20k_val3000_test17556_six_metrics.json
+类别：XGB-only 正式六指标
+作用：
+- 保存不经过 LLM override 的 XGB backbone 结果。
+- 当前 V3 test 上全部 KEEP，因此数值与 XGB+V3 最终指标相同。
+状态：OFFICIAL XGB BASELINE。
+
+4. final_test17556_xgb_llm_v3_metrics.json
+类别：旧临时指标文件
+状态：DEPRECATED
+原因：
+- 旧临时 evaluator 曾错误地把 final_formula == true_formula 当作 Formula Validity。
+建议：
+- 改名为 final_test17556_xgb_llm_v3_metrics_DEPRECATED.json
+  或移至 99_DEPRECATED。
+- 不用于论文最终评价。
+
+
+======================================================================
+十六、最终六指标的正式定义
+======================================================================
+
+1. Top-1 Accuracy
+最终 Rank1 formula 与真实中性分子式一致的比例。
+
+2. Top-3 Accuracy
+真实中性分子式存在于最终前三名候选中的比例。
+
+3. Top-5 Accuracy
+真实中性分子式存在于最终前五名候选中的比例。
+
+4. Mass-valid Rate
+最终 Top1 candidate 满足：
+|ppm| <= 5 ppm
+
+注意：
+V3 / Direct 候选搜索可使用 10 ppm，
+但正式评价继续用严格 5 ppm。
+
+5. Formula Validity
+最终 Top1 formula 同时满足：
+可解析、DBE valid、nitrogen rule valid、element ratio valid。
+
+Formula Validity 不等于 Formula Accuracy。
+
+6. Adduct Accuracy
+最终 Top1 candidate 的 latent BestAdduct 与 true adduct 一致。
+true adduct 仅用于评价，不作为推理输入。
+
+
+======================================================================
+十七、数据隔离关系
+======================================================================
+
+1. XGB training
+MassSpecGym train
+  ↓
+preranker_train20000
+  ↓
+XGB training
+
+最终：
+18,067 ranking groups
+2,488,266 candidate rows
+
+2. XGB validation
+最终：
+preranker_val3000_confirm
+2,643 ranking groups
+753,605 candidate rows
+
+3. Override V3
+- 使用 preranker_train20000_ids_for_exclude.jsonl 排除 XGB train IDs。
+- 从其他 train records 做 hard mining。
+- Fresh HardDev IDs 也从 override training 中排除。
+- 再构造 V3 train / dev。
+
+4. Formal test17556
+- 不用于 XGB 参数训练。
+- 不用于第一阶段 Listwise SFT。
+- 不用于 V3 KEEP/SWAP supervision 构造。
+- test labels 仅用于最终评价。
+
+注意：
+项目后期曾查看过 test performance，因此不能表述为“test 从研究开始到结束只运行过一次”；
+但 test labels 没有直接参与 checkpoint-80 的梯度更新。
+
+
+======================================================================
+十八、容易混淆的历史版本
+======================================================================
+
+1. Override V4 / checkpoint-176
+不是最终模型。
+最终正式 LLM：Override V3 / checkpoint-80。
+
+2. eval_final_formula_metrics.py
+旧临时 evaluator，不属于最终正式评价链。
+最终 evaluator：eval_override_v2.py。
+
+3. preranker_val3000_full
+不是最终 XGB validation dataset。
+最终 validation：preranker_val3000_confirm。
+依据：preranker_val3000_train20k_scores.f32.bin 历史 score 指纹。
+
+4. final_test17556_xgb_llm_v3_metrics.json
+旧临时 metrics。
+最终正式 metrics：
+final_test17556_xgb_llm_v3_metrics_OFFICIAL.json。
+
+
+======================================================================
+十九、建议的最终文件分类目录
+======================================================================
+
+01_CODE/
+  build_broad_preranker_dataset.py
+  eval_final_candidate_union_2000.py
+  build_formula_nothink_sft_v4_listwise_zh_resume.py
+  mz_formula_candidates.py
+  train_xgb_broad_preranker.py
+  export_preranker_shortlist.py
+  build_override_sft_v3.py
+  infer_override_deploy.py
+  merge_override_full_test.py
+  eval_override_v2.py
+
+02_SHELL/
+  train_formula_nothink_14b_10k.sh
+  train_formula_override_14b_v3.sh
+  deploy_override_v3_FINAL.sh
+
+03_MODEL/
+  第一阶段 Listwise SFT checkpoint/
+  最终使用的 LLM checkpoint/
+  preranker_xgb_train20000_val3000.json
+  preranker_xgb_train20000_val3000_summary.json
+  preranker_xgb_train20000_val3000_importance.csv
+
+04_LLM_TRAIN_DATA/
+  formula_nothink_sft_v4_train10k.jsonl
+  override_sft_v2_manifest.jsonl
+  override_sft_v3_train_mixed.jsonl
+  override_sft_v3_dev_mixed.jsonl
+  override_sft_v3_summary.json
+
+05_XGB_TRAIN/
+  preranker_train20000.*
+  preranker_train20000_ids_for_exclude.jsonl
+  preranker_train20000_ids_for_exclude_summary.json
+
+06_XGB_VAL/
+  preranker_val3000_confirm.*
+  preranker_val3000_train20k_scores.f32.bin
+
+07_DATA_ISOLATION_AND_DEV/
+  preranker_fresh_harddev_z030.*
+  preranker_hard_dev2_z030.*
+
+08_TEST17556_INTERMEDIATE/
+  preranker_test17556_all.*
+  preranker_test17556_all_top30_xgb20k_val3000.jsonl
+  preranker_test17556_all_top30_xgb20k_val3000_summary.json
+  preranker_test17556_gate015_only.jsonl
+  override_v3_test17556_gate015_pred.jsonl
+
+09_FINAL_RESULTS/
+  final_test17556_xgb_llm_v3.jsonl
+  final_test17556_xgb_llm_v3_metrics_OFFICIAL.json
+  xgb20k_val3000_test17556_six_metrics.json
+
+10_DOCUMENTATION/
+  实验一最终流程总链路.txt
+  实验一_最终版本文件说明_20260903.txt
+
+99_DEPRECATED/
+  final_test17556_xgb_llm_v3_metrics.json
+  其他 V4、val3000_full、旧 evaluator 等历史版本
+
+
+======================================================================
+二十、归档完整性结论
+======================================================================
+
+当前备份已经覆盖：
+- Broad Candidate Pool 全部核心代码；
+- V3 / OLD / Direct / V3-F 相关依赖；
+- XGB train / val ranking datasets；
+- XGB 最终模型、summary、importance；
+- XGB 历史 validation score 指纹；
+- 第一阶段 Listwise 训练数据、命令、checkpoint；
+- Override V3 数据构造代码、train/dev、命令、checkpoint；
+- 最终 V3 deploy 命令；
+- Fresh HardDev / SafetyDev；
+- 完整 test17556 Broad Pool；
+- XGB Top30；
+- z < 0.15 gate；
+- V3 KEEP/SWAP 输出；
+- 完整 final prediction；
+- 正式六指标 evaluator；
+- 正式六指标结果；
+- 数据隔离 provenance。
+
+因此该备份可以用于：
+1. 最终结果核验；
+2. test17556 inference 复现；
+3. XGBoost 重训；
+4. 两阶段 LLM 重训；
+5. 数据隔离审计；
+6. Methods / Supplementary Methods 参数追溯；
+7. 后续论文代码整理和公开。
+
+======================================================================
+END
+======================================================================
