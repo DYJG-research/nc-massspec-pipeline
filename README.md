@@ -71,6 +71,30 @@ experiment. Detailed per-file descriptions are in
 [`docs/experiment1_file_manifest.txt`](docs/experiment1_file_manifest.txt) and
 [`docs/experiment2_file_manifest.txt`](docs/experiment2_file_manifest.txt).
 
+## Model weights
+
+Trained model weights — three **Qwen3-14B** LoRA adapters + one XGBoost
+ranker — are hosted on ModelScope:
+<https://www.modelscope.cn/models/eibicidi/mols>
+
+```python
+from modelscope import snapshot_download
+model_dir = snapshot_download('eibicidi/mols')   # → local path with the four sub-directories
+```
+
+| Sub-directory | Role |
+|---|---|
+| `exp1_listwise_sft/checkpoint-1227/` | Exp-1 listwise formula reranker LoRA adapter |
+| `exp1_override_v3/checkpoint-80/` | Exp-1 final Override-V3 KEEP/SWAP formula verifier LoRA adapter |
+| `exp2_pairwise_verifier/checkpoint-194/` | Exp-2 final pairwise structure verifier LoRA adapter |
+| `exp1_xgb_preranker/preranker_xgb_train20000_val3000.json` | Exp-1 XGBoost broad candidate pre-ranker |
+
+Base model: **Qwen3-14B** (ModelScope [`Qwen/Qwen3-14B`](https://www.modelscope.cn/models/Qwen/Qwen3-14B)).
+Each LoRA checkpoint ships adapter weights (`adapter_model.safetensors` etc.)
+plus training-state files for resumable training; inference needs only the
+`adapter_*` / `args.json` files. Datasets and intermediate results are on
+Zenodo — see [`DATA.md`](DATA.md).
+
 ## Environment
 
 Python dependencies are pinned in [`requirements.txt`](requirements.txt). Key
