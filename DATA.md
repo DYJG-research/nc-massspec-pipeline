@@ -36,17 +36,28 @@ Everything below is additional (full intermediate-result set for strict auditabi
 
 ## Model weights → ModelScope
 
-| Asset | Size | Link | Role |
-|---|---|---|---|
-| Exp-1 Listwise SFT LoRA (`checkpoint-1227`) | ~392 MB | <https://www.modelscope.cn/models/eibicidi/nc-massspec-exp1-listwise-sft> | Exp-1 stage-1 formula reranker adapter |
-| Exp-1 Override-V3 LoRA (`checkpoint-80`) | ~372 MB | <https://www.modelscope.cn/models/eibicidi/nc-massspec-exp1-override-v3> | Exp-1 final KEEP/SWAP verifier adapter |
-| Exp-2 Pairwise Verifier LoRA (`checkpoint-194`) | ~913 MB | <https://www.modelscope.cn/models/eibicidi/nc-massspec-exp2-pairwise-verifier> | Exp-2 final pairwise structure verifier adapter |
-| Exp-1 XGBoost pre-ranker (`preranker_xgb_train20000_val3000.json`) | ~5 MB | <https://www.modelscope.cn/models/eibicidi/nc-massspec-exp1-xgb-preranker> | Exp-1 broad candidate pre-ranker |
+All model weights are hosted in a single ModelScope repo,
+[`eibicidi/mols`](https://www.modelscope.cn/models/eibicidi/mols) (~1.1 GB).
+Download the whole repo with one call:
 
-Each ModelScope repo ships the full training checkpoint (adapter weights +
-`optimizer.pt` / `scheduler.pt` / `rng_state.pth` for resumable training). For
-inference-only use, download just `adapter_config.json`, `adapter_model.safetensors`,
-`additional_config.json`, and `args.json` (the LoRA adapter alone is ~130 MB).
+```python
+from modelscope import snapshot_download
+model_dir = snapshot_download('eibicidi/mols')   # → local path with the four sub-directories below
+```
+
+| Path inside repo | Size | Role |
+|---|---|---|
+| `exp1_listwise_sft/checkpoint-1227/` | ~369 MB | Exp-1 stage-1 listwise formula reranker LoRA adapter |
+| `exp1_override_v3/checkpoint-80/` | ~369 MB | Exp-1 final Override-V3 KEEP/SWAP formula verifier LoRA adapter |
+| `exp2_pairwise_verifier/checkpoint-194/` | ~369 MB | Exp-2 final pairwise structure verifier LoRA adapter |
+| `exp1_xgb_preranker/preranker_xgb_train20000_val3000.json` | ~5 MB | Exp-1 XGBoost broad candidate pre-ranker |
+
+Each LoRA checkpoint directory contains the adapter weights
+(`adapter_model.safetensors`, `adapter_config.json`, `additional_config.json`,
+`args.json`) plus training-state files (`optimizer.pt`, `scheduler.pt`,
+`rng_state.pth`, `trainer_state.json`, `training_args.bin`) for resumable
+training. For inference only, the four `adapter_*` / `args.json` files suffice
+(the LoRA adapter alone is ~123 MB).
 
 Base model: **Qwen3-14B** (ModelScope [`Qwen/Qwen3-14B`](https://www.modelscope.cn/models/Qwen/Qwen3-14B)),
 not redistributed here.
